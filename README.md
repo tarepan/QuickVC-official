@@ -1,6 +1,14 @@
-# QuickVC
-This repository contains the open source code, audio samples and pretrained models of my paper: [QuickVC: Any-to-many Voice Conversion Using Inverse Short-time Fourier Transform for Faster Conversion](https://arxiv.org/abs/2302.08296)
-## [Demo Page](https://quickvc.github.io/quickvc-demo)
+<div align="center">
+
+# QuickVC : HuBERT-VITS-MSiSTFTNet Voice Conversion <!-- omit in toc -->
+[![OpenInColab]][notebook]
+[![paper_badge]][paper]
+
+</div>
+
+Clone of the official ***QuickVC*** implementation.  
+[Official demo](https://quickvc.github.io/quickvc-demo).  
+
 <img src="qvcfinalwhite.png" width="100%">
 
 ## Demo
@@ -20,4 +28,8 @@ If you have any question about the decoder, refer to [MS-ISTFT-VITS](https://git
 If you have any question about the Hubert-soft, refer to [Soft-VC](https://github.com/bshall/hubert).
 
 If you have any question about the data augumentation, refer to [FreeVC](https://github.com/OlaWod/FreeVC).
-## If you meet any problem, welcome to contact with me.
+
+[paper]: https://arxiv.org/abs/2302.08296
+[paper_badge]: http://img.shields.io/badge/paper-arxiv.2302.08296-B31B1B.svg
+[notebook]: https://colab.research.google.com/github/tarepan/QuickVC-official/blob/main/quickvc.ipynb
+[OpenInColab]: https://colab.research.google.com/assets/colab-badge.svg
