@@ -11,23 +11,52 @@ Clone of the official ***QuickVC*** implementation.
 
 <img src="qvcfinalwhite.png" width="100%">
 
-## Demo
-| Source | Target | ***QuickVC-nosr*** | ***QuickVC-sr*** | Diff-VCTK | BNE-PPG-VC | VQMIVC |
---- | --- | --- | --- | --- | --- | ---
-| [4179-25937-0002](https://drive.google.com/file/d/1v_q89V0gxjelJdpE9g0IBgADsa9xGuQ1/view?usp=sharing) | [p226_006](https://drive.google.com/file/d/11bSrhDxNmMPDi6yynQfkpiNbXHPnH70E/view?usp=sharing) | [QVCnosr4179toP226](https://drive.google.com/file/d/1CLpaEjBpY-00vDmu51fqkS0tVA61DzKw/view?usp=share_link) | [QVCsr4179toP226](https://drive.google.com/file/d/1cQwSSU5kT3l3Nuz-787-IMwFqXsPAnh7/view?usp=sharing)| [Diff4179toP226](https://drive.google.com/file/d/17htvoXVOD0wBOJqQvGsDJFotdlfZNvPP/view?usp=share_link)| [PPG4179toP226](https://drive.google.com/file/d/1lKD2ljIcTVGeQIpQ5qvsyGZMGhdxDmmo/view?usp=share_link) | [VQMIVC4179toP226](https://drive.google.com/file/d/1pc3rzlPRZ5dPqoPfkzElyI_L2Wot55M0/view?usp=share_link)|
-| [4179-25937-0002](https://drive.google.com/file/d/1v_q89V0gxjelJdpE9g0IBgADsa9xGuQ1/view?usp=sharing) | [p312_019](https://drive.google.com/file/d/1iCiYay2J8gU2J4OroDJO5XbkowjCAKpB/view?usp=sharing) | [QVCnosr4179toP312](https://drive.google.com/file/d/1FqrrOZ19z-ZczbpkTBPICqbTbNIqy5K-/view?usp=share_link) | [QVCsr4179toP312](https://drive.google.com/file/d/1u97udZNzA_ciMLzBSKkCW2B03ljsONI1/view?usp=sharing) | [Diff4179toP312](https://drive.google.com/file/d/1JH300rj4QIAEO0uXVCJs7dHGAd-WzTJA/view?usp=share_link)| [PPG4179toP312](https://drive.google.com/file/d/1nFSSs2hVaSmPrMIUlKJjQJ23p9jtyI95/view?usp=share_link) | [VQMIVC4179toP312](https://drive.google.com/file/d/1ykyUdSv-_QhE2Ahy2k4GcgBqSuLHuHcf/view?usp=share_link)|
-| [LJ032-0032](https://drive.google.com/file/d/1Flf3hToXHLWwcxZaq9qI6T6bR6voPDkS/view?usp=sharing) | [p246_011](https://drive.google.com/file/d/1Py7n9P52IGJhLFnmEQ32jIbabny5W7mx/view?usp=sharing) | [QVCnosrLJtoP246](https://drive.google.com/file/d/1k8vdnotJXgi92Q2pmJSTDHLtBJNYiZ3d/view?usp=share_link)| [QVCsrLJtoP246](https://drive.google.com/file/d/1qROuQUeAd0Flumduzr-aCgz9l8SwqsIl/view?usp=sharing)| [DiffLJtoP246](https://drive.google.com/file/d/16Kwyo0jFnNIhO8gsXnY0PenQAS2SM8Kp/view?usp=share_link)| [PPGLJtoP246](https://drive.google.com/file/d/1c5qs8sm2hherKEMV6Rit6UIukkZTaW_j/view?usp=share_link) | [VQMIVCLJtoP246](https://drive.google.com/file/d/1LPGjS8xcCCTXmOVLIEANUX5bsv4T5O7w/view?usp=share_link)|
-| [LJ032-0032](https://drive.google.com/file/d/1Flf3hToXHLWwcxZaq9qI6T6bR6voPDkS/view?usp=sharing) | [p229_006](https://drive.google.com/file/d/1cYFT_oy29N5STyZNt5ADRQvaRN5Rphea/view?usp=sharing) | [QVCnosrLJtoP229](https://drive.google.com/file/d/1HrYIBPxpGr_8S6J4CpQUMbSIZw0tKvzd/view?usp=share_link) |  [QVCsrLJtoP229](https://drive.google.com/file/d/1Sf-DrtW-PTv_V7HuC-niMTTI-I0qJi1G/view?usp=sharing) | [DiffLJtoP229](https://drive.google.com/file/d/1mRjG2XoC9FgqwFRSYwpPxb_DMULQkfwS/view?usp=share_link)| [PPGLJtoP229](https://drive.google.com/file/d/1v6HrSMODsOpIDHORixO6GFTdvKdMplnw/view?usp=share_link) | [VQMIVCLJtoP229](https://drive.google.com/file/d/1FTIHZQkBs-AdTnacqsQ7u2O1Bgm4xsN5/view?usp=share_link)|
-
+## [Pretrained Model](https://drive.google.com/drive/folders/1DF6RgIHHkn2aoyyUMt4_hPitKSc2YR9d?usp=share_link)
+Put pretrained model into logs/quickvc
 
 ## Inference with pretrained model
-Sorry, but I will open source the code after the paper is accepted.
+```python
+python convert.py
+```
+You can change convert.txt to select the target and source
+## Preprocess
+1. Hubert-Soft
+```python
+cd dataset
+python encode.py soft dataset/VCTK-16K dataset/VCTK-16K
+```
+2. Spectrogram resize data augumentation, please refer to [FreeVC](https://github.com/OlaWod/FreeVC).
+
+## Train
+
+```python
+python train.py
+```
+
+If you want to change the config and model name, change:
+```python
+parser.add_argument('-c', '--config', type=str, default="./configs/quickvc.json",help='JSON file for configuration')
+parser.add_argument('-m', '--model', type=str,default="quickvc",help='Model name')
+```                   
+in utils.py
+
 ## References
-If you have any question about the decoder, refer to [MS-ISTFT-VITS](https://github.com/MasayaKawamura/MB-iSTFT-VITS).
+### Original paper <!-- omit in toc -->
+[![paper_badge]][paper]  
+<!-- Generated with the tool -> https://arxiv2bibtex.org/?q=2302.08296&format=bibtex -->
+```bibtex
+@misc{2302.08296,
+Author = {Houjian Guo and Chaoran Liu and Carlos Toshinori Ishi and Hiroshi Ishiguro},
+Title = {QuickVC: Any-to-many Voice Conversion Using Inverse Short-time Fourier Transform for Faster Conversion},
+Year = {2023},
+Eprint = {arXiv:2302.08296},
+}
+```
 
-If you have any question about the Hubert-soft, refer to [Soft-VC](https://github.com/bshall/hubert).
-
-If you have any question about the data augumentation, refer to [FreeVC](https://github.com/OlaWod/FreeVC).
+### Acknowlegements <!-- omit in toc -->
+- [MS-ISTFT-VITS](https://github.com/MasayaKawamura/MB-iSTFT-VITS): Decoder
+- [Soft-VC](https://github.com/bshall/hubert): PriorEncoder's Hubert-soft
+- [FreeVC](https://github.com/OlaWod/FreeVC): data augumentation
 
 [paper]: https://arxiv.org/abs/2302.08296
 [paper_badge]: http://img.shields.io/badge/paper-arxiv.2302.08296-B31B1B.svg
