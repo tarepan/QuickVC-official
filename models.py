@@ -55,18 +55,20 @@ class PosteriorEncoder(nn.Module):
       out_channels:    int, # Feature dimension size of output
       hidden_channels: int, # Feature dimension size of hidden layer (WaveNet IO)
       kernel_size,          #
-      dilation_rate,        #
+      dilation_rate:   int, # WaveNet module's dilation factor per layer
       n_layers,             #
       gin_channels=0,       #
     ):
     super().__init__()
 
+    assert dilation_rate == 1, f"Support for 'dilation_rate>1' is dropped, but now {dilation_rate}"
+
     self.out_channels = out_channels
-    # PreNet - SegFC
+    # PreNet  :: (B, Feat=i, Frame) -> (B, Feat=h, Frame)  - SegFC
     self.pre = nn.Conv1d(in_channels, hidden_channels, 1)
-    # MainNet - WaveNet
-    self.enc = modules.WN(hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=gin_channels)
-    # PostNet - SegFC
+    # MainNet :: (B, Feat=h, Frame) -> (B, Feat=h, Frame)  - WaveNet
+    self.enc = modules.WN(hidden_channels, kernel_size, n_layers, gin_channels=gin_channels)
+    # PostNet :: (B, Feat=h, Frame) -> (B, Feat=2o, Frame) - SegFC
     self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
     # Remnants
@@ -75,17 +77,20 @@ class PosteriorEncoder(nn.Module):
   def forward(self, x, x_lengths, g=None):
     """
     Args:
-      x         - Input series
-      x_lengths - Effective lengths of each input series
-      g         - Conditioning
+      x         :: (B, Feat=i, Frame) - Input series
+      x_lengths                       - Effective lengths of each input series
+      g                               - Conditioning
+    Returns:
+      z         :: (B, Feat=o, Frame) - Sampled series
     """
     x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
+    # :: (B, Feat=i, Frame) -> (B, Feat=2o, Frame)
     x = self.pre(x) * x_mask
     x = self.enc(x, x_mask, g=g)
     stats = self.proj(x) * x_mask
 
-    # Normal distribution - z ~ N(z|m,s)
+    # Normal distribution :: (B, Feat=2o, Frame) -> (B, Feat=o, Frame) - z ~ N(z|m,s)
     m, logs = torch.split(stats, self.out_channels, dim=1)
     z = (m + torch.randn_like(m) * torch.exp(logs)) * x_mask
     return z, m, logs, x_mask
