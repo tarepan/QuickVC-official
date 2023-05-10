@@ -125,18 +125,16 @@ def run(rank, n_gpus, hps):
     scheduler_d.step()
 
 
-
 def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers):
+  global global_step
+
   net_g, net_d = nets
   optim_g, optim_d = optims
   scheduler_g, scheduler_d = schedulers
   train_loader, eval_loader = loaders
   if writers is not None:
     writer, writer_eval = writers
-  tmp=0
-  tmp1=1000000000
   #train_loader.batch_sampler.set_epoch(epoch)
-  global global_step
 
   net_g.train()
   net_d.train()
@@ -155,31 +153,15 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
 
 
     with autocast(enabled=hps.train.fp16_run):
-      #print(c.size())
-      y_hat, y_hat_mb, ids_slice, z_mask,\
-      (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(c, spec, g=g, mel=mel)
- 
-      mel = spec_to_mel_torch(
-          spec, 
-          hps.data.filter_length, 
-          hps.data.n_mel_channels, 
-          hps.data.sampling_rate,
-          hps.data.mel_fmin, 
-          hps.data.mel_fmax)
+      # G_Forward
+      y_hat, y_hat_mb, ids_slice, z_mask, (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(c, spec, mel)
+      # G_Loss_1/2
+      mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
       y_mel = commons.slice_segments(mel, ids_slice, hps.train.segment_size // hps.data.hop_length)
-      y_hat_mel = mel_spectrogram_torch(
-          y_hat.squeeze(1), 
-          hps.data.filter_length, 
-          hps.data.n_mel_channels, 
-          hps.data.sampling_rate, 
-          hps.data.hop_length, 
-          hps.data.win_length, 
-          hps.data.mel_fmin, 
-          hps.data.mel_fmax
-      )
-      tmp=max(tmp,y.size()[2])
-      tmp1=min(tmp1,y.size()[2])
-      y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size) # slice 
+      y_hat_mel = mel_spectrogram_torch(y_hat.squeeze(1), 
+          hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
+
+      y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size)
 
       y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
       with autocast(enabled=False):
@@ -256,8 +238,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
 
   
   if rank == 0:
-    logger.info('====> Epoch: {}'.format(epoch))
-  print(tmp,tmp1)
+    logger.info(f'====> Epoch: {epoch}')
     
 
  
@@ -265,7 +246,6 @@ def evaluate(hps, generator, eval_loader, writer_eval):
     generator.eval()
     with torch.no_grad():
       for batch_idx, (c, spec, y) in enumerate(eval_loader):
-        g = None
         spec, y = spec[:1].cuda(0), y[:1].cuda(0)
         c = c[:1].cuda(0)
 
@@ -279,14 +259,8 @@ def evaluate(hps, generator, eval_loader, writer_eval):
         hps.data.mel_fmax)
       #y_hat, y_hat_mb, attn, mask, *_ = generator.module.infer(x, x_lengths, max_len=1000)
       #y_hat_lengths = mask.sum([1,2]).long() * hps.data.hop_length
-      y_hat = generator.module.infer(c, g=g, mel=mel)
-      mel = spec_to_mel_torch(
-          spec, 
-          hps.data.filter_length, 
-          hps.data.n_mel_channels, 
-          hps.data.sampling_rate,
-          hps.data.mel_fmin, 
-          hps.data.mel_fmax)
+      y_hat = generator.module.infer(c, mel)
+      mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
       y_hat_mel = mel_spectrogram_torch(
         y_hat.squeeze(1).float(),
         hps.data.filter_length,

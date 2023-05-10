@@ -74,6 +74,12 @@ class PosteriorEncoder(nn.Module):
     self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
   def forward(self, x, x_lengths, g=None):
+    """
+    Args:
+      x         - Input series
+      x_lengths - Effective lengths of each input series
+      g
+    """
     x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
     x = self.pre(x) * x_mask
     x = self.enc(x, x_mask, g=g)
@@ -533,32 +539,58 @@ class SynthesizerTrn(nn.Module):
     else:
       print('Decoder Error in json file')
 
-  def forward(self, c, spec, g=None, mel=None, c_lengths=None, spec_lengths=None):
-    if c_lengths == None:
-      c_lengths = (torch.ones(c.size(0)) * c.size(-1)).to(c.device)
-    if spec_lengths == None:
-      spec_lengths = (torch.ones(spec.size(0)) * spec.size(-1)).to(spec.device)
-      
+  def forward(self, c, spec, mel):
+    """
+    Args:
+      c    - Unit series
+      spec - Linear spectrogram
+      mel  - Mel-spectrogram
+    Returns:
+      o
+      o_mb
+      ids_slice
+      spec_mask
+      (
+        z
+        z_p
+        m_p
+        logs_p
+        m_q
+        logs_q
+    """
+    # Effective lengths of each series
+    c_lengths    = (torch.ones(c.size(0))    *    c.size(-1)).to(c.device)
+    spec_lengths = (torch.ones(spec.size(0)) * spec.size(-1)).to(spec.device)
+
+    # Mel-to-Emb
     g = self.enc_spk(mel.transpose(1,2))
     g = g.unsqueeze(-1)
-      
+    # Unit-to-Zsi
     _, m_p, logs_p, _ = self.enc_p(c, c_lengths)
+    # Spec-to-Zsd-to-Zsi
     z, m_q, logs_q, spec_mask = self.enc_q(spec, spec_lengths, g=g) 
     z_p = self.flow(z, spec_mask, g=g)
-
+    # Zsd-to-Wave
     z_slice, ids_slice = commons.rand_slice_segments(z, spec_lengths, self.segment_size)
     o, o_mb = self.dec(z_slice, g=g)
     
     return o, o_mb, ids_slice, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-  def infer(self, c, g=None, mel=None, c_lengths=None):
-    if c_lengths == None:
-      c_lengths = (torch.ones(c.size(0)) * c.size(-1)).to(c.device)
-    g = self.enc_spk.embed_utterance(mel.transpose(1,2))
-    g = g.unsqueeze(-1)
+  def infer(self, c, mel):
+    """
+    Args:
+      c   - Unit series
+      mel - Mel-spectrogram
+    """
+    # Effective lengths of each unit series in `c`
+    c_lengths = (torch.ones(c.size(0)) * c.size(-1)).to(c.device)
 
-    z_p, m_p, logs_p, c_mask = self.enc_p(c, c_lengths)
+    # Speaker embedding
+    g = self.enc_spk.embed_utterance(mel.transpose(1,2)).unsqueeze(-1)
+
+    # Enc-Dec
+    z_p, _, _, c_mask = self.enc_p(c, c_lengths)
     z = self.flow(z_p, c_mask, g=g, reverse=True)
-    o,o_mb = self.dec(z * c_mask, g=g)
+    o, _ = self.dec(z * c_mask, g=g)
     
     return o
