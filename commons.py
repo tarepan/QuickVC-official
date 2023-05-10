@@ -41,9 +41,12 @@ def rand_spec_segments(x, x_lengths=None, segment_size=4):
 
 @torch.jit.script
 def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
+  """Gated Activation Unit with additive conditioning, GAU(x, cond) = σ(split_1(x+cond)) * tanh(split_2(x+cond))"""
   n_channels_int = n_channels[0]
+  # Additive conditioning
   in_act = input_a + input_b
-  t_act = torch.tanh(in_act[:, :n_channels_int, :])
+  # GAU
+  t_act =    torch.tanh(in_act[:, :n_channels_int, :])
   s_act = torch.sigmoid(in_act[:, n_channels_int:, :])
   acts = t_act * s_act
   return acts

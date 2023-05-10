@@ -14,7 +14,7 @@ from stft import TorchSTFT
 
 
 class ResidualCouplingBlock(nn.Module):
-  """Flow"""
+  """Flow, chain of Normal distribution parameterized by SegFC-WaveNet-SegFC."""
   def __init__(self,
       channels,
       hidden_channels,
@@ -24,18 +24,14 @@ class ResidualCouplingBlock(nn.Module):
       n_flows=4,
       gin_channels=0):
     super().__init__()
-    self.channels = channels
-    self.hidden_channels = hidden_channels
-    self.kernel_size = kernel_size
-    self.dilation_rate = dilation_rate
-    self.n_layers = n_layers
-    self.n_flows = n_flows
-    self.gin_channels = gin_channels
 
     self.flows = nn.ModuleList()
-    for i in range(n_flows):
+    for _ in range(n_flows):
       self.flows.append(modules.ResidualCouplingLayer(channels, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=gin_channels, mean_only=True))
       self.flows.append(modules.Flip())
+
+    # Remnants
+    self.channels, self.hidden_channels, self.kernel_size, self.dilation_rate, self.n_layers, self.n_flows, self.gin_channels = channels, hidden_channels, kernel_size, dilation_rate, n_layers, n_flows, gin_channels
 
   def forward(self, x, x_mask, g=None, reverse=False):
     if not reverse:
@@ -48,39 +44,48 @@ class ResidualCouplingBlock(nn.Module):
 
 
 class PosteriorEncoder(nn.Module):
-  """Used for ContentEncoder & PosteriorEncoder"""
-  def __init__(self,
-      in_channels,
-      out_channels,
-      hidden_channels,
-      kernel_size,
-      dilation_rate,
-      n_layers,
-      gin_channels=0):
-    super().__init__()
-    self.in_channels = in_channels
-    self.out_channels = out_channels
-    self.hidden_channels = hidden_channels
-    self.kernel_size = kernel_size
-    self.dilation_rate = dilation_rate
-    self.n_layers = n_layers
-    self.gin_channels = gin_channels
+  """
+  Normal distribution parameterized by SegFC-WaveNet-SegFC.
 
+  Used for ContentEncoder & PosteriorEncoder
+  """
+
+  def __init__(self,
+      in_channels:     int, # Feature dimension size of input
+      out_channels:    int, # Feature dimension size of output
+      hidden_channels: int, # Feature dimension size of hidden layer (WaveNet IO)
+      kernel_size,          #
+      dilation_rate,        #
+      n_layers,             #
+      gin_channels=0,       #
+    ):
+    super().__init__()
+
+    self.out_channels = out_channels
+    # PreNet - SegFC
     self.pre = nn.Conv1d(in_channels, hidden_channels, 1)
+    # MainNet - WaveNet
     self.enc = modules.WN(hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=gin_channels)
+    # PostNet - SegFC
     self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
+
+    # Remnants
+    self.in_channels, self.hidden_channels, self.kernel_size, self.dilation_rate, self.n_layers, self.gin_channels = in_channels, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels
 
   def forward(self, x, x_lengths, g=None):
     """
     Args:
       x         - Input series
       x_lengths - Effective lengths of each input series
-      g
+      g         - Conditioning
     """
     x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+
     x = self.pre(x) * x_mask
     x = self.enc(x, x_mask, g=g)
     stats = self.proj(x) * x_mask
+
+    # Normal distribution - z ~ N(z|m,s)
     m, logs = torch.split(stats, self.out_channels, dim=1)
     z = (m + torch.randn_like(m) * torch.exp(logs)) * x_mask
     return z, m, logs, x_mask
