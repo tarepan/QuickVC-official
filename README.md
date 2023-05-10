@@ -40,6 +40,10 @@ parser.add_argument('-m', '--model', type=str,default="quickvc",help='Model name
 ```                   
 in utils.py
 
+## Info from official repository
+- Naturalness has Language dependency (c.f. SoftVC) [issue#4](https://github.com/quickvc/QuickVC-VoiceConversion/issues/4)
+- Training time: 1~2week on RTX3090 x1 [issue#6](https://github.com/quickvc/QuickVC-VoiceConversion/issues/6)
+
 ## References
 ### Original paper <!-- omit in toc -->
 [![paper_badge]][paper]  
