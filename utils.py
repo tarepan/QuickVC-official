@@ -5,10 +5,12 @@ import argparse
 import logging
 import json
 import subprocess
+
 import numpy as np
 from scipy.io.wavfile import read
 import torch
-import torchvision
+
+
 MATPLOTLIB_FLAG = False
 
 logging.basicConfig(stream=sys.stdout, level=logging.WARNING)
@@ -101,35 +103,6 @@ def plot_spectrogram_to_numpy(spectrogram):
   return data
 
 
-def plot_alignment_to_numpy(alignment, info=None):
-  global MATPLOTLIB_FLAG
-  if not MATPLOTLIB_FLAG:
-    import matplotlib
-    matplotlib.use("Agg")
-    MATPLOTLIB_FLAG = True
-    mpl_logger = logging.getLogger('matplotlib')
-    mpl_logger.setLevel(logging.WARNING)
-  import matplotlib.pylab as plt
-  import numpy as np
-
-  fig, ax = plt.subplots(figsize=(6, 4))
-  im = ax.imshow(alignment.transpose(), aspect='auto', origin='lower',
-                  interpolation='none')
-  fig.colorbar(im, ax=ax)
-  xlabel = 'Decoder timestep'
-  if info is not None:
-      xlabel += '\n\n' + info
-  plt.xlabel(xlabel)
-  plt.ylabel('Encoder timestep')
-  plt.tight_layout()
-
-  fig.canvas.draw()
-  data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-  data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-  plt.close()
-  return data
-
-
 def load_wav_to_torch(full_path):
   sampling_rate, data = read(full_path)
   return torch.FloatTensor(data.astype(np.float32)), sampling_rate
@@ -167,28 +140,6 @@ def get_hparams(init=True):
   config = json.loads(data)
   
   hparams = HParams(**config)
-  hparams.model_dir = model_dir
-  return hparams
-
-def transform(mel, height): # 68-92
-    #r = np.random.random()
-    #rate = r * 0.3 + 0.85 # 0.85-1.15
-    #height = int(mel.size(-2) * rate)
-    tgt = torchvision.transforms.functional.resize(mel, (height, mel.size(-1)))
-    if height >= mel.size(-2):
-        return tgt[:, :mel.size(-2), :]
-    else:
-        silence = tgt[:,-1:,:].repeat(1,mel.size(-2)-height,1) 
-        silence += torch.randn_like(silence) / 10
-        return torch.cat((tgt, silence), 1)
-
-def get_hparams_from_dir(model_dir):
-  config_save_path = os.path.join(model_dir, "config.json")
-  with open(config_save_path, "r") as f:
-    data = f.read()
-  config = json.loads(data)
-
-  hparams =HParams(**config)
   hparams.model_dir = model_dir
   return hparams
 
