@@ -16,197 +16,8 @@ from stft import TorchSTFT
 import math
 
 
-class StochasticDurationPredictor(nn.Module):
-  def __init__(self, in_channels, filter_channels, kernel_size, p_dropout, n_flows=4, gin_channels=0):
-    super().__init__()
-    filter_channels = in_channels # it needs to be removed from future version.
-    self.in_channels = in_channels
-    self.filter_channels = filter_channels
-    self.kernel_size = kernel_size
-    self.p_dropout = p_dropout
-    self.n_flows = n_flows
-    self.gin_channels = gin_channels
-
-    self.log_flow = modules.Log()
-    self.flows = nn.ModuleList()
-    self.flows.append(modules.ElementwiseAffine(2))
-    for i in range(n_flows):
-      self.flows.append(modules.ConvFlow(2, filter_channels, kernel_size, n_layers=3))
-      self.flows.append(modules.Flip())
-
-    self.post_pre = nn.Conv1d(1, filter_channels, 1)
-    self.post_proj = nn.Conv1d(filter_channels, filter_channels, 1)
-    self.post_convs = modules.DDSConv(filter_channels, kernel_size, n_layers=3, p_dropout=p_dropout)
-    self.post_flows = nn.ModuleList()
-    self.post_flows.append(modules.ElementwiseAffine(2))
-    for i in range(4):
-      self.post_flows.append(modules.ConvFlow(2, filter_channels, kernel_size, n_layers=3))
-      self.post_flows.append(modules.Flip())
-
-    self.pre = nn.Conv1d(in_channels, filter_channels, 1)
-    self.proj = nn.Conv1d(filter_channels, filter_channels, 1)
-    self.convs = modules.DDSConv(filter_channels, kernel_size, n_layers=3, p_dropout=p_dropout)
-    if gin_channels != 0:
-      self.cond = nn.Conv1d(gin_channels, filter_channels, 1)
-
-  def forward(self, x, x_mask, w=None, g=None, reverse=False, noise_scale=1.0):
-    x = torch.detach(x)
-    x = self.pre(x)
-    if g is not None:
-      g = torch.detach(g)
-      x = x + self.cond(g)
-    x = self.convs(x, x_mask)
-    x = self.proj(x) * x_mask
-
-    if not reverse:
-      flows = self.flows
-      assert w is not None
-
-      logdet_tot_q = 0 
-      h_w = self.post_pre(w)
-      h_w = self.post_convs(h_w, x_mask)
-      h_w = self.post_proj(h_w) * x_mask
-      e_q = torch.randn(w.size(0), 2, w.size(2)).to(device=x.device, dtype=x.dtype) * x_mask
-      z_q = e_q
-      for flow in self.post_flows:
-        z_q, logdet_q = flow(z_q, x_mask, g=(x + h_w))
-        logdet_tot_q += logdet_q
-      z_u, z1 = torch.split(z_q, [1, 1], 1) 
-      u = torch.sigmoid(z_u) * x_mask
-      z0 = (w - u) * x_mask
-      logdet_tot_q += torch.sum((F.logsigmoid(z_u) + F.logsigmoid(-z_u)) * x_mask, [1,2])
-      logq = torch.sum(-0.5 * (math.log(2*math.pi) + (e_q**2)) * x_mask, [1,2]) - logdet_tot_q
-
-      logdet_tot = 0
-      z0, logdet = self.log_flow(z0, x_mask)
-      logdet_tot += logdet
-      z = torch.cat([z0, z1], 1)
-      for flow in flows:
-        z, logdet = flow(z, x_mask, g=x, reverse=reverse)
-        logdet_tot = logdet_tot + logdet
-      nll = torch.sum(0.5 * (math.log(2*math.pi) + (z**2)) * x_mask, [1,2]) - logdet_tot
-      return nll + logq # [b]
-    else:
-      flows = list(reversed(self.flows))
-      flows = flows[:-2] + [flows[-1]] # remove a useless vflow
-      z = torch.randn(x.size(0), 2, x.size(2)).to(device=x.device, dtype=x.dtype) * noise_scale
-      for flow in flows:
-        z = flow(z, x_mask, g=x, reverse=reverse)
-      z0, z1 = torch.split(z, [1, 1], 1)
-      logw = z0
-      return logw
-
-
-class DurationPredictor(nn.Module):
-  def __init__(self, in_channels, filter_channels, kernel_size, p_dropout, gin_channels=0):
-    super().__init__()
-
-    self.in_channels = in_channels
-    self.filter_channels = filter_channels
-    self.kernel_size = kernel_size
-    self.p_dropout = p_dropout
-    self.gin_channels = gin_channels
-
-    self.drop = nn.Dropout(p_dropout)
-    self.conv_1 = nn.Conv1d(in_channels, filter_channels, kernel_size, padding=kernel_size//2)
-    self.norm_1 = modules.LayerNorm(filter_channels)
-    self.conv_2 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
-    self.norm_2 = modules.LayerNorm(filter_channels)
-    self.proj = nn.Conv1d(filter_channels, 1, 1)
-
-    if gin_channels != 0:
-      self.cond = nn.Conv1d(gin_channels, in_channels, 1)
-
-  def forward(self, x, x_mask, g=None):
-    x = torch.detach(x)
-    if g is not None:
-      g = torch.detach(g)
-      x = x + self.cond(g)
-    x = self.conv_1(x * x_mask)
-    x = torch.relu(x)
-    x = self.norm_1(x)
-    x = self.drop(x)
-    x = self.conv_2(x * x_mask)
-    x = torch.relu(x)
-    x = self.norm_2(x)
-    x = self.drop(x)
-    x = self.proj(x * x_mask)
-    return x * x_mask
-
-
-class TextEncoder(nn.Module):
-  def __init__(self,
-      n_vocab,
-      out_channels,
-      hidden_channels,
-      filter_channels,
-      n_heads,
-      n_layers,
-      kernel_size,
-      p_dropout):
-    super().__init__()
-    self.n_vocab = n_vocab
-    self.out_channels = out_channels
-    self.hidden_channels = hidden_channels
-    self.filter_channels = filter_channels
-    self.n_heads = n_heads
-    self.n_layers = n_layers
-    self.kernel_size = kernel_size
-    self.p_dropout = p_dropout
-
-
-    self.encoder = attentions.Encoder(
-      hidden_channels,
-      filter_channels,
-      n_heads,
-      n_layers,
-      kernel_size,
-      p_dropout)
-    self.proj= nn.Conv1d(hidden_channels, out_channels * 2, 1)
-
-  def forward(self, x, x_lengths):
-    x = torch.transpose(x, 1, -1) # [b, h, t]
-    x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
-
-    x = self.encoder(x * x_mask, x_mask)
-    stats = self.proj(x) * x_mask
-
-    m, logs = torch.split(stats, self.out_channels, dim=1)
-    return x, m, logs, x_mask
-
-class Encoder(nn.Module):
-  def __init__(self,
-      in_channels,
-      out_channels,
-      hidden_channels,
-      kernel_size,
-      dilation_rate,
-      n_layers,
-      gin_channels=0):
-    super().__init__()
-    self.in_channels = in_channels
-    self.out_channels = out_channels
-    self.hidden_channels = hidden_channels
-    self.kernel_size = kernel_size
-    self.dilation_rate = dilation_rate
-    self.n_layers = n_layers
-    self.gin_channels = gin_channels
-
-    self.pre = nn.Conv1d(in_channels, hidden_channels, 1)
-    self.enc = modules.WN(hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=gin_channels)
-    self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
-
-  def forward(self, x, x_lengths, g=None):
-    x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
-    x = self.pre(x) * x_mask
-    x = self.enc(x, x_mask, g=g)
-    stats = self.proj(x) * x_mask
-    m, logs = torch.split(stats, self.out_channels, dim=1)
-    z = (m + torch.randn_like(m) * torch.exp(logs)) * x_mask
-    return z, m, logs, x_mask
-
-
 class ResidualCouplingBlock(nn.Module):
+  """Flow"""
   def __init__(self,
       channels,
       hidden_channels,
@@ -240,6 +51,7 @@ class ResidualCouplingBlock(nn.Module):
 
 
 class PosteriorEncoder(nn.Module):
+  """Used for ContentEncoder & PosteriorEncoder"""
   def __init__(self,
       in_channels,
       out_channels,
@@ -269,6 +81,7 @@ class PosteriorEncoder(nn.Module):
     m, logs = torch.split(stats, self.out_channels, dim=1)
     z = (m + torch.randn_like(m) * torch.exp(logs)) * x_mask
     return z, m, logs, x_mask
+
 
 class iSTFT_Generator(torch.nn.Module):
     def __init__(self, initial_channel, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, gin_channels=0):
@@ -598,6 +411,7 @@ class MultiPeriodDiscriminator(torch.nn.Module):
 
         return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
+
 class SpeakerEncoder(torch.nn.Module):
     def __init__(self, mel_n_channels=80, model_num_layers=3, model_hidden_size=256, model_embedding_size=256):
         super(SpeakerEncoder, self).__init__()
@@ -639,9 +453,10 @@ class SpeakerEncoder(torch.nn.Module):
         
         return embed
 
+
 class SynthesizerTrn(nn.Module):
   """
-  Synthesizer for Training
+  (Main model) Synthesizer for Training
   """
 
   def __init__(self, 
@@ -695,24 +510,28 @@ class SynthesizerTrn(nn.Module):
 
     self.use_sdp = use_sdp
 
+    # PriorEncoder
     self.enc_p = PosteriorEncoder(256, inter_channels, hidden_channels, 5, 1, 16)#768, inter_channels, hidden_channels, 5, 1, 16)
-    
+    self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels)
+
+    # SpeakerEncoder    
+    self.enc_spk = SpeakerEncoder(model_hidden_size=gin_channels, model_embedding_size=gin_channels)
+
+    # PosteriorEncoder
+    self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=gin_channels)
+
+    # Decoder
     if mb_istft_vits == True:
       print('Mutli-band iSTFT VITS')
-      self.dec = Multiband_iSTFT_Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
+      self.dec = Multiband_iSTFT_Generator(  inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
     elif ms_istft_vits == True:
       print('Mutli-stream iSTFT VITS')
       self.dec = Multistream_iSTFT_Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
     elif istft_vits == True:
       print('iSTFT-VITS')
-      self.dec = iSTFT_Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, gin_channels=gin_channels)
+      self.dec = iSTFT_Generator(            inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size,           gin_channels=gin_channels)
     else:
       print('Decoder Error in json file')
-
-    self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=gin_channels)
-    self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels)
-
-    self.enc_spk = SpeakerEncoder(model_hidden_size=gin_channels, model_embedding_size=gin_channels)
 
   def forward(self, c, spec, g=None, mel=None, c_lengths=None, spec_lengths=None):
     if c_lengths == None:
