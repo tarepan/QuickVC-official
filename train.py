@@ -63,6 +63,7 @@ def run(rank, n_gpus, hps):
     eval_loader = DataLoader(eval_dataset,  num_workers=8, shuffle=True,  batch_size=1, pin_memory=False, drop_last=False)
 
   # Model
+  ##                          n_freq from n_fft         ,             frame-scale segment size
   net_g = SynthesizerTrn(hps.data.filter_length // 2 + 1, hps.train.segment_size // hps.data.hop_length, **hps.model).cuda(rank)
   net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(rank)
   optim_g = torch.optim.AdamW(net_g.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)

@@ -468,83 +468,61 @@ class SpeakerEncoder(torch.nn.Module):
 
 
 class SynthesizerTrn(nn.Module):
-  """
-  (Main model) Synthesizer for Training
-  """
-
+  """QuickVC Generator"""
   def __init__(self, 
-    spec_channels,
-    segment_size,
-    inter_channels,
-    hidden_channels,
-    filter_channels,
-    n_heads,
-    n_layers,
-    kernel_size,
-    p_dropout,
-    resblock, 
-    resblock_kernel_sizes, 
-    resblock_dilation_sizes, 
-    upsample_rates, 
-    upsample_initial_channel, 
-    upsample_kernel_sizes,
-    gen_istft_n_fft,
-    gen_istft_hop_size,
-    n_speakers=0,
-    gin_channels=0,
-    use_sdp=False,
-    ms_istft_vits=False,
-    mb_istft_vits = False,
-    subbands = False,
-    istft_vits=False,
-    **kwargs):
-
+    spec_channels:   int,        # Feature dimension size of linear spectrogram
+    segment_size:    int,        # Decoder training segment size [frame]
+    inter_channels:  int,        # Feature dimension size of latent z (both Zsi and Zsd)
+    hidden_channels: int,        # Feature dimension size of WaveNet layers
+    resblock,                    # iSTFTNet Decoder
+    resblock_kernel_sizes,       # iSTFTNet Decoder
+    resblock_dilation_sizes,     # iSTFTNet Decoder
+    upsample_rates,              # iSTFTNet Decoder
+    upsample_initial_channel,    # iSTFTNet Decoder
+    upsample_kernel_sizes,       # iSTFTNet Decoder
+    gen_istft_n_fft,             # iSTFTNet Decoder
+    gen_istft_hop_size,          # iSTFTNet Decoder
+    filter_channels, n_heads, n_layers, kernel_size, p_dropout, # (Not used)
+    gin_channels:   int = 0,     # Feature dimension size of conditioning series
+    ms_istft_vits: bool = False, # Whether to use MS-iSTFTNet Decoder
+    mb_istft_vits: bool = False, # Whether to use MB-iSTFTNet Decoder
+    subbands = False,            # (maybe) :: int - The number of subbands
+    istft_vits:    bool = False, # Whether to use plain iSTFTNet Decoder
+    n_speakers=0,use_sdp=False,  # (Not used)
+  ):
     super().__init__()
-    self.spec_channels = spec_channels
-    self.inter_channels = inter_channels
-    self.hidden_channels = hidden_channels
-    self.filter_channels = filter_channels
-    self.n_heads = n_heads
-    self.n_layers = n_layers
-    self.kernel_size = kernel_size
-    self.p_dropout = p_dropout
-    self.resblock = resblock
-    self.resblock_kernel_sizes = resblock_kernel_sizes
-    self.resblock_dilation_sizes = resblock_dilation_sizes
-    self.upsample_rates = upsample_rates
-    self.upsample_initial_channel = upsample_initial_channel
-    self.upsample_kernel_sizes = upsample_kernel_sizes
+
     self.segment_size = segment_size
-    self.n_speakers = n_speakers
-    self.gin_channels = gin_channels
-    self.ms_istft_vits = ms_istft_vits
-    self.mb_istft_vits = mb_istft_vits
-    self.istft_vits = istft_vits
+    feat_unit: int = 256 # 768
 
-    self.use_sdp = use_sdp
-
-    # PriorEncoder
-    self.enc_p = PosteriorEncoder(256, inter_channels, hidden_channels, 5, 1, 16)#768, inter_channels, hidden_channels, 5, 1, 16)
-    self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels)
-
-    # SpeakerEncoder    
+    # PosteriorEncoder / PriorEncoder (ContentEncoder/Flow) / SpeakerEncoder
+    self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=gin_channels)
+    self.enc_p = PosteriorEncoder(feat_unit,     inter_channels, hidden_channels, 5, 1, 16)
+    self.flow = ResidualCouplingBlock(inter_channels,            hidden_channels, 5, 1,  4, gin_channels=gin_channels)
     self.enc_spk = SpeakerEncoder(model_hidden_size=gin_channels, model_embedding_size=gin_channels)
 
-    # PosteriorEncoder
-    self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=gin_channels)
-
     # Decoder
-    if mb_istft_vits == True:
+    if mb_istft_vits:
       print('Mutli-band iSTFT VITS')
       self.dec = Multiband_iSTFT_Generator(  inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
-    elif ms_istft_vits == True:
+    elif ms_istft_vits:
       print('Mutli-stream iSTFT VITS')
       self.dec = Multistream_iSTFT_Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
-    elif istft_vits == True:
+    elif istft_vits:
       print('iSTFT-VITS')
       self.dec = iSTFT_Generator(            inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size,           gin_channels=gin_channels)
     else:
       print('Decoder Error in json file')
+
+    # Remnants
+    self.spec_channels, self.inter_channels, self.hidden_channels,  = spec_channels, inter_channels, hidden_channels
+    self.resblock, self.resblock_kernel_sizes, self.resblock_dilation_sizes = resblock, resblock_kernel_sizes, resblock_dilation_sizes
+    self.upsample_rates, self.upsample_initial_channel, self.upsample_kernel_sizes = upsample_rates, upsample_initial_channel, upsample_kernel_sizes
+    self.gin_channels, self.ms_istft_vits, self.mb_istft_vits, self.istft_vits = gin_channels, ms_istft_vits, mb_istft_vits, istft_vits
+
+    # Values themself are not used
+    self.filter_channels, self.n_heads, self.n_layers, self.kernel_size, self.p_dropout, self.n_speakers, self.use_sdp = filter_channels, n_heads, n_layers, kernel_size, p_dropout, n_speakers, use_sdp
+
 
   def forward(self, c, spec, mel):
     """

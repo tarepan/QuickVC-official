@@ -30,6 +30,7 @@ if __name__ == "__main__":
     hps = utils.get_hparams_from_file(args.hpfile)
 
     print("Loading model...")
+    ##                          n_freq from n_fft         ,             frame-scale segment size
     net_g = SynthesizerTrn(hps.data.filter_length // 2 + 1, hps.train.segment_size // hps.data.hop_length, **hps.model).cuda()
     net_g.eval()
     total = sum([param.nelement() for param in net_g.parameters()])
