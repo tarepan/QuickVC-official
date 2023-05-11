@@ -479,13 +479,12 @@ class SynthesizerTrn(nn.Module):
     upsample_kernel_sizes,       # iSTFTNet Decoder
     gen_istft_n_fft,             # iSTFTNet Decoder
     gen_istft_hop_size,          # iSTFTNet Decoder
-    filter_channels, n_heads, n_layers, kernel_size, p_dropout, # (Not used)
     gin_channels:   int = 0,     # Feature dimension size of conditioning series
     ms_istft_vits: bool = False, # Whether to use MS-iSTFTNet Decoder
     mb_istft_vits: bool = False, # Whether to use MB-iSTFTNet Decoder
     subbands = False,            # (maybe) :: int - The number of subbands
     istft_vits:    bool = False, # Whether to use plain iSTFTNet Decoder
-    n_speakers=0,use_sdp=False,n_layers_q=None,use_spectral_norm=None,ssl_dim=None,use_spk=None, # (Not used)
+    filter_channels=None, n_heads=None, n_layers=None, kernel_size=None, p_dropout=None,n_speakers=0,use_sdp=False,n_layers_q=None,use_spectral_norm=None,ssl_dim=None,use_spk=None, # (Not used)
   ):
     super().__init__()
 
