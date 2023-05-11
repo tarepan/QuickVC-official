@@ -12,7 +12,7 @@ LRELU_SLOPE = 0.1
 
 
 class WN(torch.nn.Module):
-  """WaveNet module, used for PriorEncoder (ContentEncoder and Flow) and PosteriorEncoder."""
+  """WaveNet module, Res[Conv-CondGAU-SegFC-(half_skip)]xN-skipsum."""
   def __init__(self,
     hidden_channels: int,       # Feature dimension size of hidden layers
     kernel_size:     int,       # The size of convolution kernel
@@ -29,7 +29,7 @@ class WN(torch.nn.Module):
 
     # Conditioning - SegFC for all layers
     if gin_channels != 0:
-      self.cond_layer = weight_norm(Conv1d(gin_channels, 2*hidden_channels*n_layers, 1))
+      self.cond_layer = weight_norm(Conv1d(gin_channels, 2*hidden_channels * n_layers, 1))
 
     # Dropout
     self.drop = nn.Dropout(p_dropout)
@@ -39,10 +39,10 @@ class WN(torch.nn.Module):
     for i in range(n_layers):
       # WaveNet layer, Res[Conv-GAU-SegFC-(half_to_final)]
       ## Conv,  doubled channel for gated activation unit
-      self.in_layers.append(weight_norm(Conv1d(hidden_channels, 2 * hidden_channels, kernel_size, padding="same")))
+      self.in_layers.append(      weight_norm(Conv1d(hidden_channels, 2 * hidden_channels, kernel_size, padding="same")))
       ## SegFC, doubled channel for residual/skip connections
       res_skip_channels = 2 * hidden_channels if i < n_layers - 1 else hidden_channels
-      self.res_skip_layers.append(weight_norm(Conv1d(hidden_channels, res_skip_channels, 1, padding="same")))
+      self.res_skip_layers.append(weight_norm(Conv1d(hidden_channels,   res_skip_channels,           1, padding="same")))
 
     # Remnants
     self.kernel_size, self.dilation_rate, self.p_dropout = kernel_size, 1, p_dropout
@@ -196,14 +196,14 @@ class Flip(nn.Module):
 class ResidualCouplingLayer(nn.Module):
   """Flow layer."""
   def __init__(self,
-      channels:        int, # Feature dimension size of input
-      hidden_channels: int, # Feature dimension size of hidden layers
-      kernel_size,          # WaveNet module's convolution kernel size
-      dilation_rate,        # WaveNet module's dilation factor per layer
-      n_layers,             # WaveNet module's the number of convolution layers
-      p_dropout=0,          # WaveNet module's dropout probability
-      gin_channels=0,       # WaveNet module's feature dimension size of conditioning input (`0` means no conditioning)
-      mean_only=False       #
+      channels:        int,           # Feature dimension size of input
+      hidden_channels: int,           # Feature dimension size of hidden layers
+      kernel_size:     int,           # WaveNet module's convolution kernel size
+      dilation_rate:   int,           # (Not used)
+      n_layers:        int,           # WaveNet module's the number of convolution layers
+      p_dropout:       float = 0,     # WaveNet module's dropout probability
+      gin_channels:    int   = 0,     # WaveNet module's feature dimension size of conditioning input (`0` means no conditioning)
+      mean_only:       bool  = False, #
   ):
     assert channels % 2 == 0, "channels should be divisible by 2"
     assert dilation_rate == 1, f"Support for 'dilation_rate>1' is dropped, but now {dilation_rate}"

@@ -44,20 +44,17 @@ class ResidualCouplingBlock(nn.Module):
 
 
 class PosteriorEncoder(nn.Module):
-  """
-  Normal distribution parameterized by SegFC-WaveNet-SegFC.
-
-  Used for ContentEncoder & PosteriorEncoder
+  """Normal distribution parameterized by SegFC-WaveNet-SegFC.
   """
 
   def __init__(self,
-      in_channels:     int, # Feature dimension size of input
-      out_channels:    int, # Feature dimension size of output
-      hidden_channels: int, # Feature dimension size of hidden layer (WaveNet IO)
-      kernel_size,          #
-      dilation_rate:   int, # WaveNet module's dilation factor per layer
-      n_layers,             #
-      gin_channels=0,       #
+      in_channels:     int,     # Feature dimension size of input
+      out_channels:    int,     # Feature dimension size of output
+      hidden_channels: int,     # Feature dimension size of hidden layer (WaveNet IO)
+      kernel_size:     int,     # WaveNet module's convolution kernel size
+      dilation_rate:   int,     # (Not used)
+      n_layers:        int,     # WaveNet module's the number of layers
+      gin_channels:    int = 0, # Feature dimension size of conditionings
     ):
     super().__init__()
 
@@ -496,9 +493,9 @@ class SynthesizerTrn(nn.Module):
     feat_unit: int = 256 # 768
 
     # PosteriorEncoder / PriorEncoder (ContentEncoder/Flow) / SpeakerEncoder
-    self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=gin_channels)
+    self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16,    gin_channels=gin_channels)
     self.enc_p = PosteriorEncoder(feat_unit,     inter_channels, hidden_channels, 5, 1, 16)
-    self.flow = ResidualCouplingBlock(inter_channels,            hidden_channels, 5, 1,  4, gin_channels=gin_channels)
+    self.flow = ResidualCouplingBlock(inter_channels,            hidden_channels, 5, 1,  4, 4, gin_channels=gin_channels)
     self.enc_spk = SpeakerEncoder(model_hidden_size=gin_channels, model_embedding_size=gin_channels)
 
     # Decoder
