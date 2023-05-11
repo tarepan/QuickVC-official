@@ -58,7 +58,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         self._calculate_frame_lengths()
 
         # Remnants
-        self.use_sr, self.use_spk, self.spec_len = hparams.train.use_sr, hparams.model.use_spk, hparams.train.max_speclen
+        self.use_sr, self.use_spk, self.spec_len = False, False, False
 
     def _calculate_frame_lengths(self):
         """Store spec lengths for Bucketing."""
@@ -110,10 +110,9 @@ class TextAudioSpeakerCollate():
     """
     def __init__(self, hps):
         self.hps = hps
-        self.use_spk: bool = hps.model.use_spk
 
         # Remnants
-        self.use_sr: bool = hps.train.use_sr
+        self.use_spk, self.use_sr = False, False
 
     def __call__(self, batch: tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]):
         """Collate's training batch from normalized text, audio and speaker identities
@@ -128,10 +127,6 @@ class TextAudioSpeakerCollate():
         max_wav_len  = max([x[2].size(1) for x in batch])
         spec_lengths = torch.LongTensor(len(batch))
         wav_lengths  = torch.LongTensor(len(batch))
-        if self.use_spk:
-            spks = torch.FloatTensor(len(batch), batch[0][3].size(0))
-        else:
-            spks = None
 
         # Padding based on longest series
         c_padded    = torch.FloatTensor(len(batch), batch[0][0].size(0), max_spec_len)
@@ -155,8 +150,6 @@ class TextAudioSpeakerCollate():
             wav_padded[i, :, :wav.size(1)] = wav
             wav_lengths[i] = wav.size(1)
 
-            if self.use_spk:
-                spks[i] = row[3]
         spec_seglen = spec_lengths[-1] if spec_lengths[-1] < self.hps.train.max_speclen + 1 else self.hps.train.max_speclen + 1
         wav_seglen = spec_seglen * self.hps.data.hop_length 
         spec_padded, ids_slice = commons.rand_spec_segments(spec_padded, spec_lengths, spec_seglen)
@@ -166,11 +159,8 @@ class TextAudioSpeakerCollate():
 
         spec_padded = spec_padded[:,:,:-1]
         wav_padded = wav_padded[:,:,:-self.hps.data.hop_length]
-        #"""
-        if self.use_spk:
-          return c_padded, spec_padded, wav_padded, spks
-        else:
-          return c_padded, spec_padded, wav_padded
+
+        return c_padded, spec_padded, wav_padded
 
 
 class DistributedBucketSampler(DistributedSampler):
