@@ -485,7 +485,7 @@ class SynthesizerTrn(nn.Module):
     mb_istft_vits: bool = False, # Whether to use MB-iSTFTNet Decoder
     subbands = False,            # (maybe) :: int - The number of subbands
     istft_vits:    bool = False, # Whether to use plain iSTFTNet Decoder
-    n_speakers=0,use_sdp=False,  # (Not used)
+    n_speakers=0,use_sdp=False,n_layers_q=None,use_spectral_norm=None,ssl_dim=None,use_spk=None, # (Not used)
   ):
     super().__init__()
 
