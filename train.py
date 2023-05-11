@@ -17,9 +17,6 @@ from losses import generator_loss, discriminator_loss, feature_loss, kl_loss, su
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 
 
-# TODO: performance optimization
-torch.autograd.set_detect_anomaly(True)
-torch.backends.cudnn.benchmark = True
 global_step = 0
 
 
@@ -57,10 +54,10 @@ def run(rank, n_gpus, hps):
       rank=rank,
       shuffle=True)
   collate_fn = TextAudioSpeakerCollate(hps)
-  train_loader  = DataLoader(train_dataset, num_workers=8, shuffle=False,               pin_memory=True, collate_fn=collate_fn, batch_sampler=train_sampler)
+  train_loader  = DataLoader(train_dataset, num_workers=2, shuffle=False,               pin_memory=True, collate_fn=collate_fn, batch_sampler=train_sampler)
   if rank == 0:
     eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps)
-    eval_loader = DataLoader(eval_dataset,  num_workers=8, shuffle=True,  batch_size=1, pin_memory=False, drop_last=False)
+    eval_loader = DataLoader(eval_dataset,  num_workers=2, shuffle=True,  batch_size=1, pin_memory=False, drop_last=False)
 
   # Model
   ##                          n_freq from n_fft         ,             frame-scale segment size
