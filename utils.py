@@ -103,13 +103,12 @@ def plot_spectrogram_to_numpy(spectrogram):
 
 def get_hparams(init=True):
   parser = argparse.ArgumentParser()
-  parser.add_argument('-c', '--config', type=str, default="./configs/quickvc.json",
-                      help='JSON file for configuration')
-  parser.add_argument('-m', '--model', type=str,default="quickvc",
-                      help='Model name')
+  parser.add_argument('-c',  '--config',     type=str, default="./configs/quickvc.json", help='JSON file for configuration')
+  parser.add_argument('-m',  '--model',      type=str, default="quickvc",                help='Model name')
+  parser.add_argument('-mr', '--modelroot',  type=str, default="./logs",                 help='Path of model root directory')
   
   args = parser.parse_args()
-  model_dir = os.path.join("./logs", args.model)
+  model_dir = os.path.join(args.modelroot, args.model)
 
   if not os.path.exists(model_dir):
     os.makedirs(model_dir)
