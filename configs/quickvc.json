@@ -1,7 +1,8 @@
 {
+  "model_root": "./logs",
   "train": {
     "log_interval": 20,
-    "eval_interval": 5000,
+    "eval_interval": 1000,
     "seed": 1234,
     "epochs": 20000,
     "learning_rate": 2e-4,
