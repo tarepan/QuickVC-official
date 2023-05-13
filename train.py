@@ -3,9 +3,6 @@ import torch
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import torch.multiprocessing as mp
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import autocast, GradScaler
 from pqmf import PQMF
 
@@ -17,56 +14,31 @@ from losses import generator_loss, discriminator_loss, feature_loss, kl_loss, su
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 
 
-global_step = 0
-
-
-def main():
-  """Assume Single Node Multi GPUs Training Only"""
-  assert torch.cuda.is_available(), "CPU training is not allowed."
-
-  n_gpus = torch.cuda.device_count()
-  os.environ['MASTER_ADDR'] = 'localhost'
-  os.environ['MASTER_PORT'] = '65520'
-
+def run():
   hps = utils.get_hparams()
-  mp.spawn(run, nprocs=n_gpus, args=(n_gpus, hps,))
-
-
-def run(rank, n_gpus, hps):
-  global global_step
-  if rank == 0:
-    logger = utils.get_logger(hps.model_dir)
-    logger.info(hps)
-    utils.check_git_hash(hps.model_dir)
-    writer = SummaryWriter(log_dir=hps.model_dir)
-    writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
-  dist.init_process_group(backend='nccl', init_method='env://', world_size=n_gpus, rank=rank)
+  logger = utils.get_logger(hps.model_dir)
+  logger.info(hps)
+  utils.check_git_hash(hps.model_dir)
+  writer = SummaryWriter(log_dir=hps.model_dir)
+  writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
   torch.manual_seed(hps.train.seed)
-  torch.cuda.set_device(rank)
 
   # Data
   train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps)
   train_sampler = DistributedBucketSampler(
-      train_dataset,
-      hps.train.batch_size,
-      [32,40,50,60,70,80,90,100,110,120,160,200,230,260,300,350,400,450,500,600,700,800,900,1000],
-      num_replicas=n_gpus,
-      rank=rank,
-      shuffle=True)
+      train_dataset, hps.train.batch_size,
+      [32,40,50,60,70,80,90,100,110,120,160,200,230,260,300,350,400,450,500,600,700,800,900,1000], shuffle=True)
   collate_fn = TextAudioSpeakerCollate(hps)
   train_loader  = DataLoader(train_dataset, num_workers=2, shuffle=False,               pin_memory=True, collate_fn=collate_fn, batch_sampler=train_sampler)
-  if rank == 0:
-    eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps)
-    eval_loader = DataLoader(eval_dataset,  num_workers=2, shuffle=True,  batch_size=1, pin_memory=False, drop_last=False)
+  eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps)
+  eval_loader = DataLoader(eval_dataset,  num_workers=2, shuffle=True,  batch_size=1, pin_memory=False, drop_last=False)
 
   # Model
   ##                          n_freq from n_fft         ,             frame-scale segment size
-  net_g = SynthesizerTrn(hps.data.filter_length // 2 + 1, hps.train.segment_size // hps.data.hop_length, **hps.model).cuda(rank)
-  net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(rank)
+  net_g = SynthesizerTrn(hps.data.filter_length // 2 + 1, hps.train.segment_size // hps.data.hop_length, **hps.model).cuda()
+  net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda()
   optim_g = torch.optim.AdamW(net_g.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
   optim_d = torch.optim.AdamW(net_d.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
-  net_g = DDP(net_g, device_ids=[rank])
-  net_d = DDP(net_d, device_ids=[rank])
   try:
     _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), net_g, optim_g)
     _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "D_*.pth"), net_d, optim_d)
@@ -74,8 +46,7 @@ def run(rank, n_gpus, hps):
   # Training state
     global_step = (epoch_str - 1) * len(train_loader)
   except:
-    epoch_str = 1
-    global_step = 0
+    epoch_str, global_step = 1, 0
 
   # Sched
   scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hps.train.lr_decay, last_epoch=epoch_str-2)
@@ -86,31 +57,24 @@ def run(rank, n_gpus, hps):
 
   # Train & Eval
   for epoch in range(epoch_str, hps.train.epochs + 1):
-    if rank==0:
-      train_and_evaluate(rank, epoch, hps, [net_g, net_d], [optim_g, optim_d], scaler, [train_loader, eval_loader], logger, [writer, writer_eval])
-    else:
-      train_and_evaluate(rank, epoch, hps, [net_g, net_d], [optim_g, optim_d], scaler, [train_loader,        None], None,   None)
+    train_and_evaluate(global_step, epoch, hps, [net_g, net_d], [optim_g, optim_d], scaler, [train_loader, eval_loader], logger, [writer, writer_eval])
     scheduler_g.step()
     scheduler_d.step()
 
 
-def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, writers):
+def train_and_evaluate(global_step: int, epoch, hps, nets, optims, scaler, loaders, logger, writers):
   #### Epoch #####################################################################################################
-  global global_step
-
   net_g, net_d = nets
   optim_g, optim_d = optims
   train_loader, eval_loader = loaders
-  if writers is not None:
-    writer, writer_eval = writers
-  #train_loader.batch_sampler.set_epoch(epoch)
+  writer, writer_eval = writers
 
   net_g.train()
   net_d.train()
   for batch_idx, (c, spec, y) in enumerate(train_loader):
     #### Step ################################################################################################
     # Data - Unit series, Linear spectrogram, Waveform
-    c, spec, y = c.cuda(rank, non_blocking=True), spec.cuda(rank, non_blocking=True), y.cuda(rank, non_blocking=True)
+    c, spec, y = c.cuda(non_blocking=True), spec.cuda(non_blocking=True), y.cuda(non_blocking=True)
 
     mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
     with autocast(enabled=hps.train.fp16_run):
@@ -166,40 +130,39 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
 
     scaler.update()
 
-    # Logging/Eval/Checkpointing 
-    if rank==0:
-      # Logging
-      if global_step % hps.train.log_interval == 0:
-        lr = optim_g.param_groups[0]['lr']
-        losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_kl, loss_subband]
-        logger.info('Train Epoch: {} [{:.0f}%]'.format(epoch, 100. * batch_idx / len(train_loader)))
-        logger.info([x.item() for x in losses] + [global_step, lr])
-        scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_d": grad_norm_d, "grad_norm_g": grad_norm_g}
-        scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel,  "loss/g/kl": loss_kl, "loss/g/subband": loss_subband})
-        scalar_dict.update({"loss/g/{}".format(i):   v for i, v in enumerate(losses_gen)})
-        scalar_dict.update({"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)})
-        scalar_dict.update({"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)})
-        image_dict = { 
-            "slice/mel_org": utils.plot_spectrogram_to_numpy(    y_mel[0].data.cpu().numpy()),
-            "slice/mel_gen": utils.plot_spectrogram_to_numpy(y_hat_mel[0].data.cpu().numpy()), 
-            "all/mel":       utils.plot_spectrogram_to_numpy(      mel[0].data.cpu().numpy()),
-        }
-        utils.summarize(writer=writer, global_step=global_step, images=image_dict, scalars=scalar_dict)
-      # Eval & Checkpointing
-      if global_step % hps.train.eval_interval == 0:
-        evaluate(hps, net_g, eval_loader, writer_eval)
-        utils.save_checkpoint(net_g, optim_g, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "G_{}.pth".format(global_step)))
-        utils.save_checkpoint(net_d, optim_d, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "D_{}.pth".format(global_step)))
+    # Training logging
+    if global_step % hps.train.log_interval == 0:
+      lr = optim_g.param_groups[0]['lr']
+      losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_kl, loss_subband]
+      logger.info('Train Epoch: {} [{:.0f}%]'.format(epoch, 100. * batch_idx / len(train_loader)))
+      logger.info([x.item() for x in losses] + [global_step, lr])
+      scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_d": grad_norm_d, "grad_norm_g": grad_norm_g}
+      scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel,  "loss/g/kl": loss_kl, "loss/g/subband": loss_subband})
+      scalar_dict.update({"loss/g/{}".format(i):   v for i, v in enumerate(losses_gen)})
+      scalar_dict.update({"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)})
+      scalar_dict.update({"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)})
+      image_dict = { 
+          "slice/mel_org": utils.plot_spectrogram_to_numpy(    y_mel[0].data.cpu().numpy()),
+          "slice/mel_gen": utils.plot_spectrogram_to_numpy(y_hat_mel[0].data.cpu().numpy()), 
+          "all/mel":       utils.plot_spectrogram_to_numpy(      mel[0].data.cpu().numpy()),
+      }
+      utils.summarize(writer=writer, global_step=global_step, images=image_dict, scalars=scalar_dict)
+    # Eval
+    if global_step % hps.train.eval_interval == 0:
+      evaluate(global_step, hps, net_g, eval_loader, writer_eval)
+    # Checkpointing
+    if global_step % hps.train.eval_interval == 0:
+      utils.save_checkpoint(net_g, optim_g, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "G_{}.pth".format(global_step)))
+      utils.save_checkpoint(net_d, optim_d, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "D_{}.pth".format(global_step)))
 
     global_step += 1
     #### /Step ###############################################################################################
 
-  if rank == 0:
-    logger.info(f'====> Epoch: {epoch}')
+  logger.info(f'====> Epoch: {epoch}')
   #### /Epoch ####################################################################################################
   
  
-def evaluate(hps, generator, eval_loader, writer_eval):
+def evaluate(global_step, hps, generator, eval_loader, writer_eval):
     """Evaluate, then log."""
     generator.eval()
     with torch.no_grad():
@@ -231,5 +194,4 @@ def evaluate(hps, generator, eval_loader, writer_eval):
 
 
 if __name__ == "__main__":
-  os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
-  main()
+  run()

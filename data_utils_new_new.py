@@ -173,22 +173,18 @@ class DistributedBucketSampler(DistributedSampler):
     Ex) boundaries = [b1, b2, b3] -> any x s.t. length(x) <= b1 or length(x) > b3 are discarded.
     """
     def __init__(self,
-        dataset:      TextAudioSpeakerLoader, #
-        batch_size:   int,                    #
+        dataset:      TextAudioSpeakerLoader, # Dataset
+        batch_size:   int,                    # Batch size
         boundaries:   list[int],              # Bucket boundaries [frame], e.g. [32,40,50,60,...]
-        num_replicas: int | None = None,      # The number of distributed env
-        rank:         int | None = None,      # Rank of this instance
         shuffle:      bool       = True,      # Whether to shuffle samples
     ):
-        super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle)
+        super().__init__(dataset, shuffle=shuffle)
 
         self.lengths = dataset.lengths
-        self.batch_size = batch_size
-        self.boundaries = boundaries
+        self.batch_size, self.boundaries = batch_size, boundaries
 
         self.buckets, self.num_samples_per_bucket = self._create_buckets()
-        self.total_size = sum(self.num_samples_per_bucket)
-        self.num_samples = self.total_size // self.num_replicas # The number of samples from this instance
+        self.num_samples = sum(self.num_samples_per_bucket)
 
     def _create_buckets(self) -> tuple[list[list[int]], list[int]]:
         """Create 'buicket's, which include only samples within a range."""
@@ -216,8 +212,7 @@ class DistributedBucketSampler(DistributedSampler):
         for i, bucket in enumerate(buckets):
             len_bucket = len(bucket)
             # DDP batch size
-            total_batch_size = self.num_replicas * self.batch_size
-            rem = (total_batch_size - (len_bucket % total_batch_size)) % total_batch_size
+            rem = (self.batch_size - (len_bucket % self.batch_size)) % self.batch_size
             num_samples_per_bucket.append(len_bucket + rem)
 
         return buckets, num_samples_per_bucket
@@ -245,9 +240,6 @@ class DistributedBucketSampler(DistributedSampler):
             # add extra samples to make it evenly divisible
             rem = num_samples_bucket - len_bucket
             ids_bucket = ids_bucket + ids_bucket * (rem // len_bucket) + ids_bucket[:(rem % len_bucket)]
-
-            # subsample for distributed learning
-            ids_bucket = ids_bucket[self.rank::self.num_replicas]
 
             # batching
             for j in range(len(ids_bucket) // self.batch_size):
@@ -299,12 +291,8 @@ if __name__ == "__main__":
     hps = utils.get_hparams()
     train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps)
     train_sampler = DistributedBucketSampler(
-        train_dataset,
-        hps.train.batch_size,
-        [32,70,100,200,300,400,500,600,700,800,900,1000],
-        num_replicas=1,
-        rank=0,
-        shuffle=True)
+        train_dataset, hps.train.batch_size,
+        [32,70,100,200,300,400,500,600,700,800,900,1000], shuffle=True)
     collate_fn = TextAudioSpeakerCollate(hps)
     train_loader = DataLoader(train_dataset, num_workers=1, shuffle=False, pin_memory=True,
         collate_fn=collate_fn, batch_sampler=train_sampler)
