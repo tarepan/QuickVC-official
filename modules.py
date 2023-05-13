@@ -1,5 +1,5 @@
 import torch
-from torch import nn, zeros_like
+from torch import Tensor, zeros_like, nn
 from torch.nn import functional as F
 from torch.nn import Conv1d
 from torch.nn.utils import weight_norm, remove_weight_norm
@@ -9,6 +9,29 @@ from commons import init_weights, get_padding
 
 
 LRELU_SLOPE = 0.1
+
+
+@torch.jit.script
+def fused_add_tanh_sigmoid_multiply(input_a: Tensor, input_b: Tensor, n_channels: Tensor) -> Tensor:
+  """Gated Activation Unit with additive conditioning, GAU(x, cond) = σ(split_1(x+cond)) * tanh(split_2(x+cond))
+  
+  Args:
+    input_a    :: (B, Feat=2h, Frame)
+    input_b    :: (B, Feat=2h, Frame)
+    n_channels
+  Returns:
+               :: (B, Feat=h,  Frame)
+  """
+  n_channels_int = n_channels[0]
+
+  # Additive conditioning :: (B, Feat=2h, Frame) + (B, Feat=2h, Frame) -> (B, Feat=2h, Frame)
+  in_act = input_a + input_b
+
+  # GAU :: (B, Feat=h, Frame) * (B, Feat=h, Frame) -> (B, Feat=h, Frame)
+  t_act =    torch.tanh(in_act[:, :n_channels_int])
+  s_act = torch.sigmoid(in_act[:, n_channels_int:])
+  acts = t_act * s_act
+  return acts
 
 
 class WN(torch.nn.Module):

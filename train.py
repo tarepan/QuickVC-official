@@ -124,7 +124,7 @@ def train_and_evaluate(
         scaler.scale(loss_disc_all).backward()
         scaler.unscale_(optim_d)
         # D_GradClip
-        grad_norm_d = commons.clip_grad_value_(net_d.parameters(), None)
+        grad_norm_d = commons.count_grad_norm(net_d.parameters())
         # D_Optim
         scaler.step(optim_d)
 
@@ -149,7 +149,7 @@ def train_and_evaluate(
         scaler.scale(loss_gen_all).backward()
         scaler.unscale_(optim_g)
         # G_GradClip
-        grad_norm_g = commons.clip_grad_value_(net_g.parameters(), None)
+        grad_norm_g = commons.count_grad_norm(net_g.parameters())
         # G_Optim
         scaler.step(optim_g)
 
