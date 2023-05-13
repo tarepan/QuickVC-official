@@ -59,7 +59,6 @@ class ModelParams:
     gen_istft_hop_size: int
     inter_channels:     int
     hidden_channels:    int
-    resblock:           str
     resblock_kernel_sizes:    list[int]
     resblock_dilation_sizes:  list[list[int]]
     upsample_rates:           list[int]

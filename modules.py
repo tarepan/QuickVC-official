@@ -37,13 +37,12 @@ def fused_add_tanh_sigmoid_multiply(input_a: Tensor, input_b: Tensor, n_channels
 class WN(torch.nn.Module):
   """WaveNet module, Res[Conv-CondGAU-SegFC-(half_skip)]xN-skipsum."""
   def __init__(self,
-    hidden_channels: int,       # Feature dimension size of hidden layers
-    kernel_size:     int,       # The size of convolution kernel
-    n_layers:        int,       # The number of conv layers
-    gin_channels:    int   = 0, # Feature dimension size of conditioning input (`0` means no conditioning)
-    p_dropout:       float = 0, # Dropout probability
+    hidden_channels: int, # Feature dimension size of input/hidden/output
+    kernel_size:     int, # The size of convolution kernel
+    n_layers:        int, # The number of conv layers
+    gin_channels:    int, # Feature dimension size of conditioning input (`0` means no conditioning)
   ):
-    super(WN, self).__init__()
+    super().__init__()
 
     assert kernel_size % 2 == 1, f"kernel should be odd number, but {kernel_size}"
 
@@ -55,7 +54,7 @@ class WN(torch.nn.Module):
       self.cond_layer = weight_norm(Conv1d(gin_channels, 2*hidden_channels * n_layers, 1))
 
     # Dropout
-    self.drop = nn.Dropout(p_dropout)
+    self.drop = nn.Dropout(0.)
 
     self.in_layers       = torch.nn.ModuleList()
     self.res_skip_layers = torch.nn.ModuleList()
@@ -67,7 +66,7 @@ class WN(torch.nn.Module):
       res_skip_channels = 2 * hidden_channels if i < n_layers - 1 else hidden_channels
       self.res_skip_layers.append(weight_norm(Conv1d(hidden_channels,   res_skip_channels,           1, padding="same")))
 
-  def forward(self, x, x_mask, g=None):
+  def forward(self, x: Tensor, x_mask, g: Tensor | None = None):
     """
     Args:
       x      :: (B, Feat=h, Frame) - Input series
@@ -101,7 +100,6 @@ class WN(torch.nn.Module):
 
       # Activation :: (B, Feat=2h, Frame) & (B, Feat=2h, Frame) -> (B, Feat=h, Frame) - Gated activation unit with additive conditioning
       acts = commons.fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
-      acts = self.drop(acts)
 
       # Residual/Skip :: (B, Feat=h, Frame) -> (B, Feat=2h, Frame) | (B, Feat=h, Frame) - First half for Res, second half for skip
       res_skip_acts = self.res_skip_layers[i](acts)
@@ -167,67 +165,65 @@ class ResBlock1(torch.nn.Module):
 #### Flow modules ##############################################################
 class Flip(nn.Module):
   """Flow flip."""
-  def forward(self, x, *args, reverse=False, **kwargs):
+  def forward(self, x: Tensor, *args, reverse: bool = False, **kwargs):
+    """:: (B, Feat, T) -> (B, Feat, T)"""
     x = torch.flip(x, [1])
-    if not reverse:
-      logdet = torch.zeros(x.size(0)).to(dtype=x.dtype, device=x.device)
-      return x, logdet
-    else:
-      return x
+    return x
+    # if not reverse:
+    #   logdet = torch.zeros(x.size(0)).to(dtype=x.dtype, device=x.device)
 
 
 class ResidualCouplingLayer(nn.Module):
   """Flow layer."""
   def __init__(self,
-      channels:        int,           # Feature dimension size of input
-      hidden_channels: int,           # Feature dimension size of hidden layers
-      kernel_size:     int,           # WaveNet module's convolution kernel size
-      dilation_rate:   int,           # (Not used)
-      n_layers:        int,           # WaveNet module's the number of convolution layers
-      p_dropout:       float = 0,     # WaveNet module's dropout probability
-      gin_channels:    int   = 0,     # WaveNet module's feature dimension size of conditioning input (`0` means no conditioning)
-      mean_only:       bool  = False, #
+      channels:        int, # Feature dimension size of input/output
+      hidden_channels: int, # Feature dimension size of hidden layers
+      kernel_size:     int, # WaveNet module's convolution kernel size
+      n_layers:        int, # WaveNet module's the number of convolution layers
+      gin_channels:    int, # Feature dimension size of conditioning input (`0` means no conditioning)
   ):
     assert channels % 2 == 0, "channels should be divisible by 2"
-    assert dilation_rate == 1, f"Support for 'dilation_rate>1' is dropped, but now {dilation_rate}"
     super().__init__()
 
     # Params
-    self.mean_only = mean_only
     self.half_channels = channels // 2
 
-    # PreNet - SegFC, adjust feature dimension size
-    self.pre = nn.Conv1d(self.half_channels, hidden_channels, 1)
-    # MainNet - WaveNet
-    self.enc = WN(hidden_channels, kernel_size, n_layers, p_dropout=p_dropout, gin_channels=gin_channels)
-    # PostNet - SegFC, adjust feature dimension size to normal distribution parameters
-    self.post = nn.Conv1d(hidden_channels, self.half_channels * (2 - mean_only), 1)
+    # PreNet  :: (B, Feat=i/2, T) -> (B, Feat=h,   T) - SegFC
+    # MainNet :: (B, Feat=h,   T) -> (B, Feat=h,   T) - WaveNet
+    # PostNet :: (B, Feat=h,   T) -> (B, Feat=i/2, T) - SegFC
+    self.pre  = Conv1d(self.half_channels, hidden_channels,    1)
+    self.enc  = WN(hidden_channels, kernel_size, n_layers, gin_channels)
+    self.post = Conv1d(hidden_channels,    self.half_channels, 1)
     self.post.weight.data.zero_()
     self.post.bias.data.zero_()
 
-  def forward(self, x, x_mask, g=None, reverse=False):
-    x0, x1 = torch.split(x, [self.half_channels]*2, 1)
+  def forward(self, x: Tensor, x_mask: Tensor, g: Tensor | None = None, reverse: bool = False):
+    """
+    Args:
+      x       :: (B, Feat=i, T) - Input
+      x_mask
+      g                         - Conditioning input
+      reverse                   - Whether to 'reverse' flow or not
+    Returns:
+              :: (B, Feat=i, T)
+    """
+    # Split
+    x0, x1 = torch.split(x, [self.half_channels, self.half_channels], 1)
 
-    # SegFC-WN-SegFC
+    # SegFC-WN-SegFC :: (B, Feat=i/2, T) -> (B, Feat=i/2, T)
     h = self.pre(x0) * x_mask
     h = self.enc(h, x_mask, g=g)
-    stats = self.post(h) * x_mask
+    m = self.post(h) * x_mask
 
-    # Normal distribution
-    ## Parameters
-    if not self.mean_only:
-      m, logs = torch.split(stats, [self.half_channels]*2, 1)
-    else:
-      m = stats
-      logs = torch.zeros_like(m)
-    ## ? (sampling-like magic. You should study Flow)
+    # Normal distribution :: (B, Feat=i/2, T) & (B, Feat=i/2, T) -> (B, Feat=i/2, T) - (?) sampling-like magic. You should study Flow.
     if not reverse:
-      x1 = m + x1 * torch.exp(logs) * x_mask
-      x = torch.cat([x0, x1], 1)
-      logdet = torch.sum(logs, [1,2])
-      return x, logdet
+      x1 = m + x1 * x_mask
+      # logdet = torch.sum(logs, [1,2])
     else:
-      x1 = (x1 - m) * torch.exp(-logs) * x_mask
-      x = torch.cat([x0, x1], 1)
-      return x
+      x1 = (x1 - m) * x_mask
+
+    # Cat :: (B, Feat=i/2, T) & (B, Feat=i/2, T) -> (B, Feat=i, T)
+    x = torch.cat([x0, x1], 1)
+
+    return x
 #### /Flow modules #############################################################

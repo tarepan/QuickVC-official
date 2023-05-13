@@ -15,29 +15,40 @@ from stft import TorchSTFT
 
 
 class ResidualCouplingBlock(nn.Module):
-  """Flow, chain of Normal distribution parameterized by SegFC-WaveNet-SegFC."""
+  """Flow, chain of 'change of variable' parameterized by SegFC-WaveNet-SegFC."""
   def __init__(self,
-      channels,
-      hidden_channels,
-      kernel_size,
-      dilation_rate,
-      n_layers,
-      n_flows=4,
-      gin_channels=0):
+      input_channels:  int, # Feature dimension size of input
+      output_channels: int, # Feature dimension size of output
+      hidden_channels: int, # Feature dimension size of hidden layers
+      kernel_size:     int, # WaveNet module's convolution kernel size
+      n_layers:        int, # WaveNet module's the number of convolution layers
+      n_flows:         int, # The number of Flow layers
+      gin_channels:    int, # Feature dimension size of conditioning input (`0` means no conditioning)
+    ):
     super().__init__()
+
+    # Params
+    assert input_channels == output_channels, f"I/O should match their feature dimension, but {input_channels} != {output_channels}"
+    channels = input_channels # Feature dimension size of input/output
 
     self.flows = nn.ModuleList()
     for _ in range(n_flows):
-      self.flows.append(modules.ResidualCouplingLayer(channels, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=gin_channels, mean_only=True))
+      self.flows.append(modules.ResidualCouplingLayer(channels, hidden_channels, kernel_size, n_layers, gin_channels))
       self.flows.append(modules.Flip())
 
-  def forward(self, x: Tensor, x_mask, g: Tensor | None = None, reverse: bool = False):
-    if not reverse:
-      for flow in self.flows:
-        x, _ = flow(x, x_mask, g=g, reverse=reverse)
-    else:
-      for flow in reversed(self.flows):
-        x = flow(x, x_mask, g=g, reverse=reverse)
+  def forward(self, x: Tensor, x_mask: Tensor, g: Tensor | None = None, reverse: bool = False):
+    """
+    Args:
+        x      :: (B, Feat, Frame) - Input
+        x_mask
+        g      :: (B, Feat, Frame) - Condioning input
+        reverse                    - Whether to 'reverse' flow or not
+    Returns:
+               :: (B, Feat, Frame)
+    """
+    flows = self.flows if not reverse else reversed(self.flows)
+    for flow in flows:
+      x = flow(x, x_mask, g=g, reverse=reverse)
     return x
 
 
@@ -46,17 +57,14 @@ class PosteriorEncoder(nn.Module):
   """
 
   def __init__(self,
-      in_channels:     int,     # Feature dimension size of input
-      out_channels:    int,     # Feature dimension size of output
-      hidden_channels: int,     # Feature dimension size of hidden layer (WaveNet IO)
-      kernel_size:     int,     # WaveNet module's convolution kernel size
-      dilation_rate:   int,     # (Not used)
-      n_layers:        int,     # WaveNet module's the number of layers
-      gin_channels:    int = 0, # Feature dimension size of conditionings
+      in_channels:     int, # Feature dimension size of input
+      out_channels:    int, # Feature dimension size of output
+      hidden_channels: int, # Feature dimension size of hidden layer
+      kernel_size:     int, # WaveNet module's convolution kernel size
+      n_layers:        int, # WaveNet module's the number of layers
+      gin_channels:    int, # Feature dimension size of conditionings
     ):
     super().__init__()
-
-    assert dilation_rate == 1, f"Support for 'dilation_rate>1' is dropped, but now {dilation_rate}"
 
     self.out_channels = out_channels
 
@@ -64,7 +72,7 @@ class PosteriorEncoder(nn.Module):
     # MainNet :: (B, Feat=h, Frame) -> (B, Feat=h,  Frame) - WaveNet
     # PostNet :: (B, Feat=h, Frame) -> (B, Feat=2o, Frame) - SegFC
     self.pre  = Conv1d(in_channels,     hidden_channels,  1)
-    self.enc  = modules.WN(hidden_channels, kernel_size, n_layers, gin_channels=gin_channels)
+    self.enc  = modules.WN(hidden_channels, kernel_size, n_layers, gin_channels)
     self.proj = Conv1d(hidden_channels, 2 * out_channels, 1)
 
   def forward(self, x: Tensor, x_lengths: Tensor, g: Tensor | None = None):
@@ -72,7 +80,7 @@ class PosteriorEncoder(nn.Module):
     Args:
       x         :: (B, Feat=i, Frame) - Input series
       x_lengths :: (B,)               - Effective lengths of each input series
-      g                               - Conditioning
+      g                               - Conditioning input
     Returns:
       z         :: (B, Feat=o, Frame) - Sampled series
     """
@@ -465,17 +473,17 @@ class SynthesizerTrn(nn.Module):
     segment_size:    int,        # Decoder training segment size [frame]
     inter_channels:  int,        # Feature dimension size of latent z (both Zsi and Zsd)
     hidden_channels: int,        # Feature dimension size of WaveNet layers
-    resblock_kernel_sizes:    list[int],          # iSTFTNet Decoder
-    resblock_dilation_sizes:  list[list[int]],    # iSTFTNet Decoder
-    upsample_rates:           list[int],          # iSTFTNet Decoder
-    upsample_initial_channel: int,                # iSTFTNet Decoder
-    upsample_kernel_sizes:    list[int],          # iSTFTNet Decoder
-    gen_istft_n_fft:          int,                # iSTFTNet Decoder
-    gen_istft_hop_size:       int,                # iSTFTNet Decoder
-    istft_vits:               bool       = False, # Whether to use plain iSTFTNet Decoder
-    ms_istft_vits:            bool       = False, # Whether to use MS-iSTFTNet Decoder
-    mb_istft_vits:            bool       = False, # Whether to use MB-iSTFTNet Decoder
-    subbands:                 bool | int = False, # (maybe) The number of subbands
+    resblock_kernel_sizes:    list[int],          # Decoder
+    resblock_dilation_sizes:  list[list[int]],    # Decoder
+    upsample_rates:           list[int],          # Decoder
+    upsample_initial_channel: int,                # Decoder
+    upsample_kernel_sizes:    list[int],          # Decoder
+    gen_istft_n_fft:          int,                # Decoder
+    gen_istft_hop_size:       int,                # Decoder
+    istft_vits:               bool       = False, # Decoder, Whether to use plain iSTFTNet Decoder
+    ms_istft_vits:            bool       = False, # Decoder, Whether to use MS-iSTFTNet Decoder
+    mb_istft_vits:            bool       = False, # Decoder, Whether to use MB-iSTFTNet Decoder
+    subbands:                 bool | int = False, # Decoder, (maybe) The number of subbands
     gin_channels:   int = 0,     # Feature dimension size of conditioning series
     **kwargs,                    # (Not used, for backward-compatibility)   # pyright: ignore [reportUnknownParameterType, reportMissingParameterType]
   ):
@@ -488,12 +496,12 @@ class SynthesizerTrn(nn.Module):
 
     # Params
     self.segment_size = segment_size
-    feat_unit: int = 256 # 768
+    unit_channels: int = 256 # 768 # Feature dimension size of unit series
 
     # PosteriorEncoder / PriorEncoder (ContentEncoder/Flow) / SpeakerEncoder
-    self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16,    gin_channels=gin_channels)
-    self.enc_p = PosteriorEncoder(feat_unit,     inter_channels, hidden_channels, 5, 1, 16)
-    self.flow = ResidualCouplingBlock(inter_channels,            hidden_channels, 5, 1,  4, 4, gin_channels=gin_channels)
+    self.enc_q =      PosteriorEncoder(spec_channels,  inter_channels, hidden_channels, 5, 16,    gin_channels)
+    self.enc_p =      PosteriorEncoder(unit_channels,  inter_channels, hidden_channels, 5, 16,    0)
+    self.flow  = ResidualCouplingBlock(inter_channels, inter_channels, hidden_channels, 5,  4, 4, gin_channels)
     self.enc_spk = SpeakerEncoder(model_hidden_size=gin_channels, model_embedding_size=gin_channels)
 
     # Decoder
