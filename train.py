@@ -123,8 +123,6 @@ def train_and_evaluate(
         optim_d.zero_grad()
         scaler.scale(loss_disc_all).backward()
         scaler.unscale_(optim_d)
-        # D_GradClip
-        grad_norm_d = commons.count_grad_norm(net_d.parameters())
         # D_Optim
         scaler.step(optim_d)
 
@@ -148,8 +146,6 @@ def train_and_evaluate(
         optim_g.zero_grad()
         scaler.scale(loss_gen_all).backward()
         scaler.unscale_(optim_g)
-        # G_GradClip
-        grad_norm_g = commons.count_grad_norm(net_g.parameters())
         # G_Optim
         scaler.step(optim_g)
 
@@ -157,6 +153,10 @@ def train_and_evaluate(
 
         # Training logging
         if global_step % hps.train.log_interval == 0:
+            # Gradient norm counting
+            grad_norm_g = commons.count_grad_norm(net_g.parameters())
+            grad_norm_d = commons.count_grad_norm(net_d.parameters())
+
             lr = optim_g.param_groups[0]['lr']
             losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_kl, loss_subband]
             logger.info('Train Epoch: {} [{:.0f}%]'.format(epoch, 100. * batch_idx / len(train_loader)))
