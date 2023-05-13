@@ -189,7 +189,7 @@ def get_hparams() -> QuickVCParams:
   return hparams
 
 
-def get_hparams_from_file(config_path: str):
+def get_hparams_from_file(config_path: str) -> QuickVCParams:
   with open(config_path, "r") as f:
     data = f.read()
   config = json.loads(data)

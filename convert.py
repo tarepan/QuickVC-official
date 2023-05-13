@@ -6,6 +6,7 @@ import logging
 import time
 
 import torch
+from torch import Tensor
 import librosa
 from scipy.io.wavfile import write
 from tqdm import tqdm
@@ -72,12 +73,12 @@ if __name__ == "__main__":
             # Infer
             ## TgtWave-to-Mel for speaker embedding
             mel_tgt = mel_spectrogram_torch(
-                wav_tgt, 
+                wav_tgt,
                 hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
             ## SrcWave-to-Unit for content encoding
-            c = hubert_soft.units(wav_src).transpose(2,1)
+            unit: Tensor = hubert_soft.units(wav_src).transpose(2,1)
             ## SrcUnit/TgtMel-to-Wave
-            audio = net_g.infer(c, mel_tgt)
+            audio = net_g.infer(unit, mel_tgt)
 
             # Save
             audio = audio[0][0].data.cpu().float().numpy()

@@ -44,9 +44,6 @@ class WN(torch.nn.Module):
       res_skip_channels = 2 * hidden_channels if i < n_layers - 1 else hidden_channels
       self.res_skip_layers.append(weight_norm(Conv1d(hidden_channels,   res_skip_channels,           1, padding="same")))
 
-    # Remnants
-    self.kernel_size, self.dilation_rate, self.p_dropout = kernel_size, 1, p_dropout
-
   def forward(self, x, x_mask, g=None):
     """
     Args:
@@ -221,9 +218,6 @@ class ResidualCouplingLayer(nn.Module):
     self.post = nn.Conv1d(hidden_channels, self.half_channels * (2 - mean_only), 1)
     self.post.weight.data.zero_()
     self.post.bias.data.zero_()
-
-    # Remnants
-    self.channels, self.hidden_channels, self.kernel_size, self.dilation_rate, self.n_layers = channels, hidden_channels, kernel_size, dilation_rate, n_layers
 
   def forward(self, x, x_mask, g=None, reverse=False):
     x0, x1 = torch.split(x, [self.half_channels]*2, 1)

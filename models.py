@@ -1,7 +1,7 @@
 import math
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn import Conv1d, ConvTranspose1d, Conv2d
 from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
@@ -30,10 +30,7 @@ class ResidualCouplingBlock(nn.Module):
       self.flows.append(modules.ResidualCouplingLayer(channels, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=gin_channels, mean_only=True))
       self.flows.append(modules.Flip())
 
-    # Remnants
-    self.channels, self.hidden_channels, self.kernel_size, self.dilation_rate, self.n_layers, self.n_flows, self.gin_channels = channels, hidden_channels, kernel_size, dilation_rate, n_layers, n_flows, gin_channels
-
-  def forward(self, x, x_mask, g=None, reverse=False):
+  def forward(self, x: Tensor, x_mask, g: Tensor | None = None, reverse: bool = False):
     if not reverse:
       for flow in self.flows:
         x, _ = flow(x, x_mask, g=g, reverse=reverse)
@@ -61,26 +58,25 @@ class PosteriorEncoder(nn.Module):
     assert dilation_rate == 1, f"Support for 'dilation_rate>1' is dropped, but now {dilation_rate}"
 
     self.out_channels = out_channels
-    # PreNet  :: (B, Feat=i, Frame) -> (B, Feat=h, Frame)  - SegFC
-    self.pre = nn.Conv1d(in_channels, hidden_channels, 1)
-    # MainNet :: (B, Feat=h, Frame) -> (B, Feat=h, Frame)  - WaveNet
-    self.enc = modules.WN(hidden_channels, kernel_size, n_layers, gin_channels=gin_channels)
+
+    # PreNet  :: (B, Feat=i, Frame) -> (B, Feat=h,  Frame) - SegFC
+    # MainNet :: (B, Feat=h, Frame) -> (B, Feat=h,  Frame) - WaveNet
     # PostNet :: (B, Feat=h, Frame) -> (B, Feat=2o, Frame) - SegFC
-    self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
+    self.pre  = Conv1d(in_channels,     hidden_channels,  1)
+    self.enc  = modules.WN(hidden_channels, kernel_size, n_layers, gin_channels=gin_channels)
+    self.proj = Conv1d(hidden_channels, 2 * out_channels, 1)
 
-    # Remnants
-    self.in_channels, self.hidden_channels, self.kernel_size, self.dilation_rate, self.n_layers, self.gin_channels = in_channels, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels
-
-  def forward(self, x, x_lengths, g=None):
+  def forward(self, x: Tensor, x_lengths: Tensor, g: Tensor | None = None):
     """
     Args:
       x         :: (B, Feat=i, Frame) - Input series
-      x_lengths                       - Effective lengths of each input series
+      x_lengths :: (B,)               - Effective lengths of each input series
       g                               - Conditioning
     Returns:
       z         :: (B, Feat=o, Frame) - Sampled series
     """
-    x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+    # Generate mask
+    x_mask = commons.sequence_mask(x_lengths, x.size(2)).unsqueeze(1).to(x.dtype)
 
     # :: (B, Feat=i, Frame) -> (B, Feat=2o, Frame)
     x = self.pre(x) * x_mask
@@ -124,7 +120,7 @@ class iSTFT_Generator(torch.nn.Module):
         self.reflection_pad = torch.nn.ReflectionPad1d((1, 0))
         self.cond = nn.Conv1d(256, 512, 1)
         self.stft = TorchSTFT(filter_length=self.gen_istft_n_fft, hop_length=self.gen_istft_hop_size, win_length=self.gen_istft_n_fft)
-    def forward(self, x, g=None):
+    def forward(self, x: Tensor, g: Tensor | None = None):
         
         x = self.conv_pre(x)
         x = x + self.cond(g)
@@ -191,7 +187,7 @@ class Multiband_iSTFT_Generator(torch.nn.Module):
         self.gen_istft_hop_size = gen_istft_hop_size
 
 
-    def forward(self, x, g=None):
+    def forward(self, x: Tensor, g: Tensor | None = None):
       
       stft = TorchSTFT(filter_length=self.gen_istft_n_fft, hop_length=self.gen_istft_hop_size, win_length=self.gen_istft_n_fft).to(x.device)
       #print(x.device)
@@ -279,7 +275,7 @@ class Multistream_iSTFT_Generator(torch.nn.Module):
         self.cond = nn.Conv1d(256, 512, 1)
 
 
-    def forward(self, x, g=None):
+    def forward(self, x: Tensor, g: Tensor | None = None):
       stft = TorchSTFT(filter_length=self.gen_istft_n_fft, hop_length=self.gen_istft_hop_size, win_length=self.gen_istft_n_fft).to(x.device)
       # pqmf = PQMF(x.device)
 
@@ -465,28 +461,29 @@ class SpeakerEncoder(torch.nn.Module):
 
 
 class SynthesizerTrn(nn.Module):
-  """QuickVC Generator"""
+  """QuickVC Generator for training (w/ posterior encoder, w/o wave-to-unit encoder)"""
   def __init__(self, 
     spec_channels:   int,        # Feature dimension size of linear spectrogram
     segment_size:    int,        # Decoder training segment size [frame]
     inter_channels:  int,        # Feature dimension size of latent z (both Zsi and Zsd)
     hidden_channels: int,        # Feature dimension size of WaveNet layers
-    resblock,                    # iSTFTNet Decoder
-    resblock_kernel_sizes,       # iSTFTNet Decoder
-    resblock_dilation_sizes,     # iSTFTNet Decoder
-    upsample_rates,              # iSTFTNet Decoder
-    upsample_initial_channel,    # iSTFTNet Decoder
-    upsample_kernel_sizes,       # iSTFTNet Decoder
-    gen_istft_n_fft,             # iSTFTNet Decoder
-    gen_istft_hop_size,          # iSTFTNet Decoder
+    resblock:                 str,                # iSTFTNet Decoder
+    resblock_kernel_sizes:    list[int],          # iSTFTNet Decoder
+    resblock_dilation_sizes:  list[list[int]],    # iSTFTNet Decoder
+    upsample_rates:           list[int],          # iSTFTNet Decoder
+    upsample_initial_channel: int,                # iSTFTNet Decoder
+    upsample_kernel_sizes:    list[int],          # iSTFTNet Decoder
+    gen_istft_n_fft:          int,                # iSTFTNet Decoder
+    gen_istft_hop_size:       int,                # iSTFTNet Decoder
+    istft_vits:               bool       = False, # Whether to use plain iSTFTNet Decoder
+    ms_istft_vits:            bool       = False, # Whether to use MS-iSTFTNet Decoder
+    mb_istft_vits:            bool       = False, # Whether to use MB-iSTFTNet Decoder
+    subbands:                 bool | int = False, # (maybe) The number of subbands
     gin_channels:   int = 0,     # Feature dimension size of conditioning series
-    ms_istft_vits: bool = False, # Whether to use MS-iSTFTNet Decoder
-    mb_istft_vits: bool = False, # Whether to use MB-iSTFTNet Decoder
-    subbands = False,            # (maybe) :: int - The number of subbands
-    istft_vits:    bool = False, # Whether to use plain iSTFTNet Decoder
-    filter_channels=None, n_heads=None, n_layers=None, kernel_size=None, p_dropout=None,n_speakers=0,use_sdp=False,n_layers_q=None,use_spectral_norm=None,ssl_dim=None,use_spk=None, # (Not used)
+    **kwargs,                    # (Not used, for backward-compatibility)   # pyright: ignore [reportUnknownParameterType, reportMissingParameterType]
   ):
     super().__init__()
+    print(f"Loaded but not used: {kwargs}")
 
     self.segment_size = segment_size
     feat_unit: int = 256 # 768
@@ -510,27 +507,17 @@ class SynthesizerTrn(nn.Module):
     else:
       print('Decoder Error in json file')
 
-    # Remnants
-    self.spec_channels, self.inter_channels, self.hidden_channels,  = spec_channels, inter_channels, hidden_channels
-    self.resblock, self.resblock_kernel_sizes, self.resblock_dilation_sizes = resblock, resblock_kernel_sizes, resblock_dilation_sizes
-    self.upsample_rates, self.upsample_initial_channel, self.upsample_kernel_sizes = upsample_rates, upsample_initial_channel, upsample_kernel_sizes
-    self.gin_channels, self.ms_istft_vits, self.mb_istft_vits, self.istft_vits = gin_channels, ms_istft_vits, mb_istft_vits, istft_vits
-
-    # Values themself are not used
-    self.filter_channels, self.n_heads, self.n_layers, self.kernel_size, self.p_dropout, self.n_speakers, self.use_sdp = filter_channels, n_heads, n_layers, kernel_size, p_dropout, n_speakers, use_sdp
-
-
-  def forward(self, c, spec, mel):
+  def forward(self, unit: Tensor, spec: Tensor, mel: Tensor):
     """
     Args:
-      c    - Unit series
-      spec - Linear spectrogram
-      mel  - Mel-spectrogram
+      unit - Unit series
+      spec - Linear-frequency spectrogram
+      mel  - Mel-frequency    spectrogram
     Returns:
       o
       o_mb
       ids_slice
-      spec_mask
+      spec_mask - Mask, used for loss masking
       (
         z
         z_p
@@ -539,39 +526,40 @@ class SynthesizerTrn(nn.Module):
         m_q
         logs_q
     """
-    # Effective lengths of each series
-    c_lengths    = (torch.ones(c.size(0))    *    c.size(-1)).to(c.device)
+    # Effective lengths of each series - TODO: All effective? :: (B,)
+    unit_lengths = (torch.ones(unit.size(0)) * unit.size(-1)).to(unit.device)
     spec_lengths = (torch.ones(spec.size(0)) * spec.size(-1)).to(spec.device)
 
     # Mel-to-Emb
-    g = self.enc_spk(mel.transpose(1,2))
-    g = g.unsqueeze(-1)
+    g = self.enc_spk(mel.transpose(1,2)).unsqueeze(-1)
     # Unit-to-Zsi
-    _, m_p, logs_p, _ = self.enc_p(c, c_lengths)
+    _, m_p, logs_p, _ = self.enc_p(unit, unit_lengths)
     # Spec-to-Zsd-to-Zsi
-    z, m_q, logs_q, spec_mask = self.enc_q(spec, spec_lengths, g=g) 
+    z, m_q, logs_q, spec_mask = self.enc_q(spec, spec_lengths, g=g)
     z_p = self.flow(z, spec_mask, g=g)
     # Zsd-to-Wave
     z_slice, ids_slice = commons.rand_slice_segments(z, spec_lengths, self.segment_size)
     o, o_mb = self.dec(z_slice, g=g)
-    
+
     return o, o_mb, ids_slice, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-  def infer(self, c, mel):
+  def infer(self, unit: Tensor, mel: Tensor) -> Tensor:
     """
     Args:
-      c   - Unit series
-      mel - Mel-spectrogram
+      unit - Unit series
+      mel  - Mel-spectrogram
+    Returns:
+           :: () - Infered Waveform
     """
     # Effective lengths of each unit series in `c`
-    c_lengths = (torch.ones(c.size(0)) * c.size(-1)).to(c.device)
+    c_lengths = (torch.ones(unit.size(0)) * unit.size(-1)).to(unit.device)
 
     # Speaker embedding
     g = self.enc_spk.embed_utterance(mel.transpose(1,2)).unsqueeze(-1)
 
     # Enc-Dec
-    z_p, _, _, c_mask = self.enc_p(c, c_lengths)
+    z_p, _, _, c_mask = self.enc_p(unit, c_lengths)
     z = self.flow(z_p, c_mask, g=g, reverse=True)
     o, _ = self.dec(z * c_mask, g=g)
-    
+
     return o

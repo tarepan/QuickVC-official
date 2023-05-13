@@ -6,12 +6,14 @@ from typing import Literal
 
 import numpy as np
 import torch
+from torch import FloatTensor
 import torch.utils.data
 from torch.utils.data.distributed import DistributedSampler
 from scipy.io.wavfile import read
 
 import commons
 from mel_processing import spectrogram_torch
+from utils import QuickVCParams
 
 
 def load_filepaths(filename: str) -> list[list[str]]:
@@ -27,10 +29,10 @@ def load_filepaths(filename: str) -> list[list[str]]:
   return filepaths
 
 
-def load_wav_to_torch(full_path: str):
+def load_wav_to_torch(full_path: str) -> tuple[FloatTensor, int]:
   # SciPy read
   sampling_rate, data = read(full_path)
-  return torch.FloatTensor(data.astype(np.float32)), sampling_rate
+  return FloatTensor(data.astype(np.float32)), sampling_rate
 
 
 class UnitAudioSpecLoader(torch.utils.data.Dataset):
@@ -45,21 +47,18 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
             c     - Unit series
 
     """
-    def __init__(self, mode: Literal["train", "eval"], hparams):
-        self.max_wav_value: float = hparams.data.max_wav_value  # Maximum amplitude in the audio format
-        self.sampling_rate: int   = hparams.data.sampling_rate  # For validation
-        self.filter_length: int   = hparams.data.filter_length  # Spectrogram n_fft
-        self.win_length:    int   = hparams.data.win_length     # Spectrogram window length
-        self.hop_length:    int   = hparams.data.hop_length     # Frame hop length
+    def __init__(self, mode: Literal["train", "eval"], hparams: QuickVCParams):
+        self.max_wav_value = hparams.data.max_wav_value  # Maximum amplitude in the audio format
+        self.sampling_rate = hparams.data.sampling_rate  # For validation
+        self.filter_length = hparams.data.filter_length  # Spectrogram n_fft
+        self.win_length    = hparams.data.win_length     # Spectrogram window length
+        self.hop_length    = hparams.data.hop_length     # Frame hop length
 
         self.audiopaths = load_filepaths(hps.data.training_files if mode == "train" else hps.data.validation_files)
 
         random.seed(1243)
         random.shuffle(self.audiopaths)
         self._calculate_frame_lengths()
-
-        # Remnants
-        self.use_sr, self.use_spk, self.spec_len = False, False, False
 
     def _calculate_frame_lengths(self):
         """Store spec lengths for Bucketing."""
@@ -96,7 +95,7 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
         # c :: () - Unit series
         c = np.load(filename.replace(".wav", ".npy"))
         c = torch.FloatTensor(c.transpose(1,0))
-        
+
         return c, spec, audio_norm
 
     def __getitem__(self, index: int):
@@ -111,9 +110,6 @@ class TextAudioSpeakerCollate():
     """
     def __init__(self, hps):
         self.hps = hps
-
-        # Remnants
-        self.use_spk, self.use_sr = False, False
 
     def __call__(self, batch: tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]):
         """Collate's training batch from normalized text, audio and speaker identities
