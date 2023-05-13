@@ -55,8 +55,11 @@ def kl_loss(z_p, logs_q, m_p, logs_p, z_mask):
 
   kl = logs_p - logs_q - 0.5
   kl += 0.5 * ((z_p - m_p)**2) * torch.exp(-2. * logs_p)
+
+  # Masked average (average on non-mask)
   kl = torch.sum(kl * z_mask)
   l = kl / torch.sum(z_mask)
+
   return l
 
 def subband_stft_loss(h, y_mb, y_hat_mb):

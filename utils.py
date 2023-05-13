@@ -75,13 +75,20 @@ class QuickVCParams:
     model: ModelParams
 
 
-def load_checkpoint(checkpoint_path, model, optimizer=None):
+#### Check pointing ##################################################################
+def load_checkpoint(checkpoint_path: str, model, optimizer=None):
+  """Load 4 states."""
   assert os.path.isfile(checkpoint_path)
+
   checkpoint_dict = torch.load(checkpoint_path, map_location='cpu')
   iteration = checkpoint_dict['iteration']
   learning_rate = checkpoint_dict['learning_rate']
+
+  # Optimizer
   if optimizer is not None:
     optimizer.load_state_dict(checkpoint_dict['optimizer'])
+
+  # Model
   saved_state_dict = checkpoint_dict['model']
   if hasattr(model, 'module'):
     state_dict = model.module.state_dict()
@@ -98,14 +105,15 @@ def load_checkpoint(checkpoint_path, model, optimizer=None):
     model.module.load_state_dict(new_state_dict)
   else:
     model.load_state_dict(new_state_dict)
-  logger.info("Loaded checkpoint '{}' (iteration {})" .format(
-    checkpoint_path, iteration))
+
+  logger.info(f"Loaded checkpoint '{checkpoint_path}' (iteration {iteration})")
+
   return model, optimizer, learning_rate, iteration
 
 
-def save_checkpoint(model, optimizer, learning_rate, iteration, checkpoint_path):
-  logger.info("Saving model and optimizer state at iteration {} to {}".format(
-    iteration, checkpoint_path))
+def save_checkpoint(model, optimizer, learning_rate: float, iteration: int, checkpoint_path: str):
+  """Save 4 states."""
+  logger.info(f"Saving model and optimizer state at iteration {iteration} to {checkpoint_path}")
   if hasattr(model, 'module'):
     state_dict = model.module.state_dict()
   else:
@@ -114,6 +122,16 @@ def save_checkpoint(model, optimizer, learning_rate, iteration, checkpoint_path)
               'iteration': iteration,
               'optimizer': optimizer.state_dict(),
               'learning_rate': learning_rate}, checkpoint_path)
+
+
+def latest_checkpoint_path(dir_path: str, regex: str = "G_*.pth"):
+  """Query latest checkpoint."""
+  f_list = glob.glob(os.path.join(dir_path, regex))
+  f_list.sort(key=lambda f: int("".join(filter(str.isdigit, f))))
+  x = f_list[-1]
+  print(x)
+  return x
+#### /Check pointing #################################################################
 
 
 def summarize(writer, global_step, scalars={}, histograms={}, images={}, audios={}, audio_sampling_rate=22050):
@@ -125,14 +143,6 @@ def summarize(writer, global_step, scalars={}, histograms={}, images={}, audios=
     writer.add_image(k, v, global_step, dataformats='HWC')
   for k, v in audios.items():
     writer.add_audio(k, v, global_step, audio_sampling_rate)
-
-
-def latest_checkpoint_path(dir_path, regex="G_*.pth"):
-  f_list = glob.glob(os.path.join(dir_path, regex))
-  f_list.sort(key=lambda f: int("".join(filter(str.isdigit, f))))
-  x = f_list[-1]
-  print(x)
-  return x
 
 
 def plot_spectrogram_to_numpy(spectrogram):
