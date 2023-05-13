@@ -9,6 +9,7 @@ from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
 import commons
 from commons import init_weights, get_padding
 import modules
+from modules import ResBlock1
 from pqmf import PQMF
 from stft import TorchSTFT
 
@@ -90,7 +91,7 @@ class PosteriorEncoder(nn.Module):
 
 
 class iSTFT_Generator(torch.nn.Module):
-    def __init__(self, initial_channel, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, gin_channels=0):
+    def __init__(self, initial_channel, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, gin_channels=0):
         super(iSTFT_Generator, self).__init__()
         # self.h = h
         self.gen_istft_n_fft = gen_istft_n_fft
@@ -99,7 +100,6 @@ class iSTFT_Generator(torch.nn.Module):
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
         self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3))
-        resblock = modules.ResBlock1 if resblock == '1' else modules.ResBlock2
 
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
@@ -111,7 +111,7 @@ class iSTFT_Generator(torch.nn.Module):
         for i in range(len(self.ups)):
             ch = upsample_initial_channel//(2**(i+1))
             for j, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
-                self.resblocks.append(resblock(ch, k, d))
+                self.resblocks.append(ResBlock1(ch, k, d))
 
         self.post_n_fft = self.gen_istft_n_fft
         self.conv_post = weight_norm(Conv1d(ch, self.post_n_fft + 2, 7, 1, padding=3))
@@ -153,14 +153,13 @@ class iSTFT_Generator(torch.nn.Module):
 
 
 class Multiband_iSTFT_Generator(torch.nn.Module):
-    def __init__(self, initial_channel, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=0):
+    def __init__(self, initial_channel, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=0):
         super(Multiband_iSTFT_Generator, self).__init__()
         # self.h = h
         self.subbands = subbands
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
         self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3))
-        resblock = modules.ResBlock1 if resblock == '1' else modules.ResBlock2
 
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
@@ -172,7 +171,7 @@ class Multiband_iSTFT_Generator(torch.nn.Module):
         for i in range(len(self.ups)):
             ch = upsample_initial_channel//(2**(i+1))
             for j, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
-                self.resblocks.append(resblock(ch, k, d))
+                self.resblocks.append(ResBlock1(ch, k, d))
 
         self.post_n_fft = gen_istft_n_fft
         self.ups.apply(init_weights)
@@ -233,14 +232,13 @@ class Multiband_iSTFT_Generator(torch.nn.Module):
 
 
 class Multistream_iSTFT_Generator(torch.nn.Module):
-    def __init__(self, initial_channel, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=0):
+    def __init__(self, initial_channel, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=0):
         super(Multistream_iSTFT_Generator, self).__init__()
         # self.h = h
         self.subbands = subbands
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
         self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3))
-        resblock = modules.ResBlock1 if resblock == '1' else modules.ResBlock2
 
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
@@ -252,7 +250,7 @@ class Multistream_iSTFT_Generator(torch.nn.Module):
         for i in range(len(self.ups)):
             ch = upsample_initial_channel//(2**(i+1))
             for j, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
-                self.resblocks.append(resblock(ch, k, d))
+                self.resblocks.append(ResBlock1(ch, k, d))
 
         self.post_n_fft = gen_istft_n_fft
         self.ups.apply(init_weights)
@@ -467,7 +465,6 @@ class SynthesizerTrn(nn.Module):
     segment_size:    int,        # Decoder training segment size [frame]
     inter_channels:  int,        # Feature dimension size of latent z (both Zsi and Zsd)
     hidden_channels: int,        # Feature dimension size of WaveNet layers
-    resblock:                 str,                # iSTFTNet Decoder
     resblock_kernel_sizes:    list[int],          # iSTFTNet Decoder
     resblock_dilation_sizes:  list[list[int]],    # iSTFTNet Decoder
     upsample_rates:           list[int],          # iSTFTNet Decoder
@@ -483,8 +480,13 @@ class SynthesizerTrn(nn.Module):
     **kwargs,                    # (Not used, for backward-compatibility)   # pyright: ignore [reportUnknownParameterType, reportMissingParameterType]
   ):
     super().__init__()
-    print(f"Loaded but not used: {kwargs}")
 
+    # For Backward-compatibility
+    print(f"Loaded but not used: {kwargs}")
+    if kwargs.get("resblock"):
+        assert kwargs["resblock"] == '1', "ResBlock2 support is droped."
+
+    # Params
     self.segment_size = segment_size
     feat_unit: int = 256 # 768
 
@@ -497,13 +499,13 @@ class SynthesizerTrn(nn.Module):
     # Decoder
     if mb_istft_vits:
       print('Mutli-band iSTFT VITS')
-      self.dec = Multiband_iSTFT_Generator(  inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
+      self.dec = Multiband_iSTFT_Generator(  inter_channels, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
     elif ms_istft_vits:
       print('Mutli-stream iSTFT VITS')
-      self.dec = Multistream_iSTFT_Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
+      self.dec = Multistream_iSTFT_Generator(inter_channels, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
     elif istft_vits:
       print('iSTFT-VITS')
-      self.dec = iSTFT_Generator(            inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size,           gin_channels=gin_channels)
+      self.dec = iSTFT_Generator(            inter_channels, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size,           gin_channels=gin_channels)
     else:
       print('Decoder Error in json file')
 
