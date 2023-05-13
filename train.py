@@ -1,15 +1,20 @@
 """Train QuickVC"""
 
 import os
+from logging import Logger
+
 import torch
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.cuda.amp import autocast, GradScaler
 from pqmf import PQMF
 
 import commons
 import utils
+from utils import QuickVCParams
 from data_utils_new_new import UnitAudioSpecLoader, TextAudioSpeakerCollate, DistributedBucketSampler
 from models import SynthesizerTrn, MultiPeriodDiscriminator
 from losses import generator_loss, discriminator_loss, feature_loss, kl_loss, subband_stft_loss
@@ -17,13 +22,20 @@ from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 
 
 def run():
+    """Training runner"""
+
+    # Arguments and hyper parameters
     hps = utils.get_hparams()
+
+    # Logger
     logger = utils.get_logger(hps.model_dir)
-    logger.info(hps)
-    utils.check_git_hash(hps.model_dir)
-    writer = SummaryWriter(log_dir=hps.model_dir)
+    writer      = SummaryWriter(log_dir=hps.model_dir)
     writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
-    torch.manual_seed(hps.train.seed)
+
+    # Seed
+    torch.manual_seed(hps.train.seed)  # pyright: ignore [reportUnknownMemberType]; because of PyTorch
+
+    logger.info(hps)
 
     # Data
     train_dataset, eval_dataset = UnitAudioSpecLoader("train", hps), UnitAudioSpecLoader("eval", hps)
@@ -38,8 +50,8 @@ def run():
     ##                          n_freq from n_fft         ,             frame-scale segment size
     net_g = SynthesizerTrn(hps.data.filter_length // 2 + 1, hps.train.segment_size // hps.data.hop_length, **hps.model).cuda()
     net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda()
-    optim_g = torch.optim.AdamW(net_g.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
-    optim_d = torch.optim.AdamW(net_d.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
+    optim_g = AdamW(net_g.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
+    optim_d = AdamW(net_d.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
     try:
         _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), net_g, optim_g)
         _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "D_*.pth"), net_d, optim_d)
@@ -50,20 +62,32 @@ def run():
         epoch_str, global_step = 1, 0
 
     # Sched
-    scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hps.train.lr_decay, last_epoch=epoch_str-2)
-    scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hps.train.lr_decay, last_epoch=epoch_str-2)
+    scheduler_g = ExponentialLR(optim_g, gamma=hps.train.lr_decay, last_epoch=epoch_str-2)
+    scheduler_d = ExponentialLR(optim_d, gamma=hps.train.lr_decay, last_epoch=epoch_str-2)
 
     # AMP
     scaler = GradScaler(enabled=hps.train.fp16_run)
 
     # Train & Eval
     for epoch in range(epoch_str, hps.train.epochs + 1):
-        train_and_evaluate(global_step, epoch, hps, [net_g, net_d], [optim_g, optim_d], scaler, [train_loader, eval_loader], logger, [writer, writer_eval])
+        train_and_evaluate(global_step, epoch, hps, (net_g, net_d), (optim_g, optim_d), scaler, (train_loader, eval_loader), logger, (writer, writer_eval))
         scheduler_g.step()
         scheduler_d.step()
 
 
-def train_and_evaluate(global_step: int, epoch, hps, nets, optims, scaler, loaders, logger, writers):
+def train_and_evaluate(
+    global_step: int,
+    epoch:       int,
+    hps:         QuickVCParams,
+    nets:        tuple[SynthesizerTrn, MultiPeriodDiscriminator],
+    optims:      tuple[AdamW, AdamW],
+    scaler:      GradScaler,
+    loaders:     tuple[DataLoader, DataLoader],
+    logger:      Logger,
+    writers:     tuple[SummaryWriter, SummaryWriter]
+):
+    """Train and Evaluate QuickVC."""
+
     #### Epoch #####################################################################################################
     net_g, net_d = nets
     optim_g, optim_d = optims
@@ -161,20 +185,22 @@ def train_and_evaluate(global_step: int, epoch, hps, nets, optims, scaler, loade
 
     logger.info(f'====> Epoch: {epoch}')
     #### /Epoch ####################################################################################################
-  
- 
-def evaluate(global_step, hps, generator, eval_loader, writer_eval):
-    """Evaluate, then log."""
-    generator.eval()
+
+
+def evaluate(global_step: int, hps: QuickVCParams, net_g: SynthesizerTrn, loader: DataLoader, writer: SummaryWriter):
+    """Evaluate reconstruction, then log."""
+
+    net_g.eval()
+
+    # Inference
     with torch.no_grad():
-        for c, spec, y in eval_loader:
-            c, spec, y = c[:1].cuda(0), spec[:1].cuda(0), y[:1].cuda(0)
+        # Data - only the first sample
+        for c, spec, y in loader:
+            c, spec, y = c[:1].cuda(), spec[:1].cuda(), y[:1].cuda()
             break
+        # Forward
         mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
-        #y_hat, y_hat_mb, attn, mask, *_ = generator.module.infer(x, x_lengths, max_len=1000)
-        #y_hat_lengths = mask.sum([1,2]).long() * hps.data.hop_length
-        y_hat = generator.module.infer(c, mel)
-        mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
+        y_hat = net_g.module.infer(c, mel)
         y_hat_mel = mel_spectrogram_torch(
           y_hat.squeeze(1).float(),
           hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)

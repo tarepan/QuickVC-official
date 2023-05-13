@@ -1,5 +1,4 @@
 {
-  "model_root": "./logs",
   "train": {
     "log_interval": 20,
     "eval_interval": 1000,

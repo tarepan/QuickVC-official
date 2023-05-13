@@ -1,10 +1,10 @@
+from dataclasses import dataclass
 import os
 import glob
 import sys
 import argparse
 import logging
 import json
-import subprocess
 
 import torch
 
@@ -13,6 +13,67 @@ MATPLOTLIB_FLAG = False
 
 logging.basicConfig(stream=sys.stdout, level=logging.WARNING)
 logger = logging
+
+
+@dataclass
+class TrainParams:
+  log_interval:  int
+  eval_interval: int
+  seed:          int
+  epochs:        int
+  learning_rate: float
+  betas:         tuple[float, float]
+  eps:           float
+  batch_size:    int
+  fp16_run:      bool
+  lr_decay:      float
+  segment_size:  int
+  c_mel:         float
+  c_kl:          float
+  max_speclen:   int
+  fft_sizes:     tuple[int, int, int]
+  hop_sizes:     tuple[int, int, int]
+  win_lengths:   tuple[int, int, int]
+  window:        str
+
+@dataclass
+class DataParams:
+    training_files:   str
+    validation_files: str
+    max_wav_value:    float
+    sampling_rate:    int
+    filter_length:    int
+    hop_length:       int
+    win_length:       int
+    n_mel_channels:   int
+    mel_fmin:         float | None
+    mel_fmax:         float | None
+
+@dataclass
+class ModelParams:
+    ms_istft_vits:      bool
+    mb_istft_vits:      bool
+    istft_vits:         bool
+    subbands:           int
+    gen_istft_n_fft:    int
+    gen_istft_hop_size: int
+    inter_channels:     int
+    hidden_channels:    int
+    resblock:           str
+    resblock_kernel_sizes:    list[int]
+    resblock_dilation_sizes:  list[list[int]]
+    upsample_rates:           list[int]
+    upsample_initial_channel: int
+    upsample_kernel_sizes:    list[int]
+    use_spectral_norm:  bool
+    gin_channels:       int
+
+@dataclass
+class QuickVCParams:
+    model_dir: str
+    train: TrainParams
+    data:  DataParams
+    model: ModelParams
 
 
 def load_checkpoint(checkpoint_path, model, optimizer=None):
@@ -101,36 +162,34 @@ def plot_spectrogram_to_numpy(spectrogram):
   return data
 
 
-def get_hparams(init=True):
+def get_hparams() -> QuickVCParams:
   parser = argparse.ArgumentParser()
   parser.add_argument('-c',  '--config',     type=str, default="./configs/quickvc.json", help='JSON file for configuration')
   parser.add_argument('-m',  '--model',      type=str, default="quickvc",                help='Model name')
   parser.add_argument('-mr', '--modelroot',  type=str, default="./logs",                 help='Path of model root directory')
   
   args = parser.parse_args()
-  model_dir = os.path.join(args.modelroot, args.model)
+  model_dir: str = os.path.join(args.modelroot, args.model)
 
-  if not os.path.exists(model_dir):
-    os.makedirs(model_dir)
-
+  # Load
   config_path = args.config
-  config_save_path = os.path.join(model_dir, "config.json")
-  if init:
-    with open(config_path, "r") as f:
-      data = f.read()
-    with open(config_save_path, "w") as f:
-      f.write(data)
-  else:
-    with open(config_save_path, "r") as f:
-      data = f.read()
+  with open(config_path, "r") as f:
+    data = f.read()
   config = json.loads(data)
-  
   hparams = HParams(**config)
   hparams.model_dir = model_dir
+
+  # Save
+  if not os.path.exists(model_dir):
+    os.makedirs(model_dir)
+  config_save_path = os.path.join(model_dir, "config.json")
+  with open(config_save_path, "w") as f:
+    f.write(data)
+
   return hparams
 
 
-def get_hparams_from_file(config_path):
+def get_hparams_from_file(config_path: str):
   with open(config_path, "r") as f:
     data = f.read()
   config = json.loads(data)
@@ -139,27 +198,7 @@ def get_hparams_from_file(config_path):
   return hparams
 
 
-def check_git_hash(model_dir):
-  source_dir = os.path.dirname(os.path.realpath(__file__))
-  if not os.path.exists(os.path.join(source_dir, ".git")):
-    logger.warn("{} is not a git repository, therefore hash value comparison will be ignored.".format(
-      source_dir
-    ))
-    return
-
-  cur_hash = subprocess.getoutput("git rev-parse HEAD")
-
-  path = os.path.join(model_dir, "githash")
-  if os.path.exists(path):
-    saved_hash = open(path).read()
-    if saved_hash != cur_hash:
-      logger.warn("git hash values are different. {}(saved) != {}(current)".format(
-        saved_hash[:8], cur_hash[:8]))
-  else:
-    open(path, "w").write(cur_hash)
-
-
-def get_logger(model_dir, filename="train.log"):
+def get_logger(model_dir: str, filename: str = "train.log"):
   global logger
   logger = logging.getLogger(os.path.basename(model_dir))
   logger.setLevel(logging.DEBUG)
