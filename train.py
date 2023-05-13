@@ -2,13 +2,13 @@ import os
 import torch
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.writer import SummaryWriter
 from torch.cuda.amp import autocast, GradScaler
 from pqmf import PQMF
 
 import commons
 import utils
-from data_utils_new_new import TextAudioSpeakerLoader, TextAudioSpeakerCollate, DistributedBucketSampler
+from data_utils_new_new import UnitAudioSpecLoader, TextAudioSpeakerCollate, DistributedBucketSampler
 from models import SynthesizerTrn, MultiPeriodDiscriminator
 from losses import generator_loss, discriminator_loss, feature_loss, kl_loss, subband_stft_loss
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
@@ -24,14 +24,13 @@ def run():
   torch.manual_seed(hps.train.seed)
 
   # Data
-  train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps)
+  train_dataset, eval_dataset = UnitAudioSpecLoader("train", hps), UnitAudioSpecLoader("eval", hps)
   train_sampler = DistributedBucketSampler(
       train_dataset, hps.train.batch_size,
       [32,40,50,60,70,80,90,100,110,120,160,200,230,260,300,350,400,450,500,600,700,800,900,1000], shuffle=True)
-  collate_fn = TextAudioSpeakerCollate(hps)
-  train_loader  = DataLoader(train_dataset, num_workers=2, shuffle=False,               pin_memory=True, collate_fn=collate_fn, batch_sampler=train_sampler)
-  eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps)
-  eval_loader = DataLoader(eval_dataset,  num_workers=2, shuffle=True,  batch_size=1, pin_memory=False, drop_last=False)
+  train_collate = TextAudioSpeakerCollate(hps)
+  train_loader = DataLoader(train_dataset, num_workers=2, shuffle=False,               pin_memory=True, collate_fn=train_collate, batch_sampler=train_sampler)
+  eval_loader  = DataLoader(eval_dataset,  num_workers=2, shuffle=True,  batch_size=1, pin_memory=False, drop_last=False)
 
   # Model
   ##                          n_freq from n_fft         ,             frame-scale segment size

@@ -2,6 +2,7 @@
 
 import os
 import random
+from typing import Literal
 
 import numpy as np
 import torch
@@ -32,7 +33,7 @@ def load_wav_to_torch(full_path: str):
   return torch.FloatTensor(data.astype(np.float32)), sampling_rate
 
 
-class TextAudioSpeakerLoader(torch.utils.data.Dataset):
+class UnitAudioSpecLoader(torch.utils.data.Dataset):
     """Dataset, Multi speaker version.
 
         1) loads audio, speaker_id, text pairs
@@ -44,14 +45,14 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
             c     - Unit series
 
     """
-    def __init__(self, audiopaths, hparams):
+    def __init__(self, mode: Literal["train", "eval"], hparams):
         self.max_wav_value: float = hparams.data.max_wav_value  # Maximum amplitude in the audio format
         self.sampling_rate: int   = hparams.data.sampling_rate  # For validation
         self.filter_length: int   = hparams.data.filter_length  # Spectrogram n_fft
         self.win_length:    int   = hparams.data.win_length     # Spectrogram window length
         self.hop_length:    int   = hparams.data.hop_length     # Frame hop length
 
-        self.audiopaths = load_filepaths(audiopaths)
+        self.audiopaths = load_filepaths(hps.data.training_files if mode == "train" else hps.data.validation_files)
 
         random.seed(1243)
         random.shuffle(self.audiopaths)
@@ -173,7 +174,7 @@ class DistributedBucketSampler(DistributedSampler):
     Ex) boundaries = [b1, b2, b3] -> any x s.t. length(x) <= b1 or length(x) > b3 are discarded.
     """
     def __init__(self,
-        dataset:      TextAudioSpeakerLoader, # Dataset
+        dataset:      UnitAudioSpecLoader, # Dataset
         batch_size:   int,                    # Batch size
         boundaries:   list[int],              # Bucket boundaries [frame], e.g. [32,40,50,60,...]
         shuffle:      bool       = True,      # Whether to shuffle samples
@@ -289,7 +290,7 @@ if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
     hps = utils.get_hparams()
-    train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps)
+    train_dataset = UnitAudioSpecLoader("train", hps)
     train_sampler = DistributedBucketSampler(
         train_dataset, hps.train.batch_size,
         [32,70,100,200,300,400,500,600,700,800,900,1000], shuffle=True)
