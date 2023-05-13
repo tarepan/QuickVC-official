@@ -179,20 +179,13 @@ def evaluate(global_step, hps, generator, eval_loader, writer_eval):
           y_hat.squeeze(1).float(),
           hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
 
-    image_dict = {
-      "gen/mel": utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy()),
-      "gt/mel":  utils.plot_spectrogram_to_numpy(      mel[0].cpu().numpy())
-    }
-    audio_dict = {"gen/audio": y_hat[0], "gt/audio": y[0]}
+    # Log
+    image_dict = {"gen/mel": utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy()), "gt/mel": utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())}
+    audio_dict = {"gen/audio": y_hat[0],                                                  "gt/audio": y[0]}
+    utils.summarize(writer=writer, global_step=global_step, images=image_dict, audios=audio_dict, audio_sampling_rate=hps.data.sampling_rate)
 
-    import torchaudio
-    print(y_hat.size())
-    torchaudio.save(f"temp_result/vctkms_new_tem_result_{global_step}.wav",    y_hat[0, :, :].cpu(), 16000)
-    torchaudio.save(f"temp_result/vctkms_new_tem_result_gt_{global_step}.wav",     y[0, :, :].cpu(), 16000)
-
-    utils.summarize(writer=writer_eval, global_step=global_step, images=image_dict, audios=audio_dict, audio_sampling_rate=hps.data.sampling_rate)
-    generator.train()
+    net_g.train()
 
 
 if __name__ == "__main__":
-  run()
+    run()
