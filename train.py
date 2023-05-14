@@ -136,7 +136,7 @@ def train_and_evaluate(
                 loss_fm = feature_loss(fmap_r, fmap_g)
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
                 if hps.model.mb_istft_vits == True:
-                    pqmf = PQMF(y.device)
+                    pqmf = PQMF()
                     y_mb = pqmf.analysis(y)
                     loss_subband = subband_stft_loss(hps, y_mb, y_hat_mb)
                 else:

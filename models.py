@@ -99,39 +99,66 @@ class PosteriorEncoder(nn.Module):
 
 
 class iSTFT_Generator(torch.nn.Module):
-    def __init__(self, initial_channel, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, gin_channels=0):
-        super(iSTFT_Generator, self).__init__()
-        # self.h = h
-        self.gen_istft_n_fft = gen_istft_n_fft
-        self.gen_istft_hop_size = gen_istft_hop_size
+    def __init__(self,
+                 initial_channel:          int, # Feature dimension size of latent input
+                 resblock_kernel_sizes,
+                 resblock_dilation_sizes,
+                 upsample_rates,
+                 upsample_initial_channel: int, # Feature dimension size of first hidden layer
+                 upsample_kernel_sizes,
+                 n_fft:                    int, # n_fft    of Synthesis iSTFT
+                 hop_istft:                int, # Hop size of Synthesis iSTFT
+                 subbands:                 int, # The number of subbands
+                 gin_channels:             int, # Feature dimension size of conditioning input
+        ):
+        super().__init__()
 
+        # Params
+        self.n_freq = n_fft // 2 + 1
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
-        self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3))
 
+        # PreNet for latent :: (B, Feat=i,   Frame) -> (B, Feat=h, Frame) - Conv
+        # PreNet for cond   :: (B, Feat=gin, Frame) -> (B, Feat=h, Frame) - SegFC
+        self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, padding="same"))
+        self.cond     =             Conv1d(gin_channels,    upsample_initial_channel, 1)
+
+        # MainNet - UpMRF
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
             self.ups.append(weight_norm(
                 ConvTranspose1d(upsample_initial_channel//(2**i), upsample_initial_channel//(2**(i+1)),
                                 k, u, padding=(k-u)//2)))
-
+        self.ups.apply(init_weights)
         self.resblocks = nn.ModuleList()
+        ch = 0 # For typing
         for i in range(len(self.ups)):
-            ch = upsample_initial_channel//(2**(i+1))
+            ch = upsample_initial_channel // (2**(i+1))
             for j, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
                 self.resblocks.append(ResBlock1(ch, k, d))
 
-        self.post_n_fft = self.gen_istft_n_fft
-        self.conv_post = weight_norm(Conv1d(ch, self.post_n_fft + 2, 7, 1, padding=3))
-        self.ups.apply(init_weights)
-        self.conv_post.apply(init_weights)
+        # PostNet :: (B, Feat, Frame) -> (B, Feat=2*freq, Frame)
         self.reflection_pad = torch.nn.ReflectionPad1d((1, 0))
-        self.cond = nn.Conv1d(256, 512, 1)
-        self.stft = TorchSTFT(filter_length=self.gen_istft_n_fft, hop_length=self.gen_istft_hop_size, win_length=self.gen_istft_n_fft)
-    def forward(self, x: Tensor, g: Tensor | None = None):
+        self.conv_post = weight_norm(Conv1d(ch, 2 * self.n_freq, 7, padding="same"))
+        self.conv_post.apply(init_weights)
+
+        # iSTFT
+        self.stft = TorchSTFT(n_fft, hop_istft, n_fft)
+
+    def forward(self, x: Tensor, g: Tensor):
+        """Forward
         
-        x = self.conv_pre(x)
-        x = x + self.cond(g)
+        Args:
+            x   :: (B, Feat, Frame) - Latent series
+            g   :: (B, Feat, Frame) - Conditioning series
+        Returns:
+            out :: (B, 1, T)        - Generated waveform
+        """
+
+        # PreNet :: (B, Feat=i, Frame) & (B, Feat=gin, Frame) -> (B, Feat=h, Frame)
+        x = self.conv_pre(x) + self.cond(g)
+
+        # MainNet
         for i in range(self.num_upsamples):
             x = F.leaky_relu(x, modules.LRELU_SLOPE)
             x = self.ups[i](x)
@@ -143,11 +170,19 @@ class iSTFT_Generator(torch.nn.Module):
                     xs += self.resblocks[i*self.num_kernels+j](x)
             x = xs / self.num_kernels
         x = F.leaky_relu(x)
+
+        # PostNet :: (B, Feat, Frame) -> (B, Feat=2freq, Frame)
         x = self.reflection_pad(x)
         x = self.conv_post(x)
-        spec = torch.exp(x[:,:self.post_n_fft // 2 + 1, :])
-        phase = math.pi*torch.sin(x[:, self.post_n_fft // 2 + 1:, :])
-        out = self.stft.inverse(spec, phase).to(x.device)
+
+        # iSTFT
+        ## Split :: (B, Feat=2freq, Frame) -> 2x (B, Freq=freq, Frame)
+        spec, phase = torch.split(x, [self.n_freq]*2, dim=1)
+        ## Run :: 2x (B, Freq, Frame) -> (B, 1, T)
+        spec  =           torch.exp(spec)
+        phase = math.pi * torch.sin(phase)
+        out = self.stft.inverse(spec, phase)
+
         return out, None
 
     def remove_weight_norm(self):
@@ -161,176 +196,226 @@ class iSTFT_Generator(torch.nn.Module):
 
 
 class Multiband_iSTFT_Generator(torch.nn.Module):
-    def __init__(self, initial_channel, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=0):
-        super(Multiband_iSTFT_Generator, self).__init__()
-        # self.h = h
+    def __init__(self,
+                 initial_channel:          int, # Feature dimension size of latent input
+                 resblock_kernel_sizes,
+                 resblock_dilation_sizes,
+                 upsample_rates,
+                 upsample_initial_channel: int, # Feature dimension size of first hidden layer
+                 upsample_kernel_sizes,
+                 n_fft:                    int, # n_fft    of Synthesis iSTFT
+                 hop_istft:                int, # Hop size of Synthesis iSTFT
+                 subbands:                 int, # The number of subbands
+                 gin_channels:             int, # Feature dimension size of conditioning input
+        ):
+        super().__init__()
+
+        # Params
         self.subbands = subbands
+        self.n_freq = n_fft // 2 + 1
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
-        self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3))
 
+        # PreNet for latent :: (B, Feat=i,   Frame) -> (B, Feat=h, Frame) - Conv
+        # PreNet for cond   :: (B, Feat=gin, Frame) -> (B, Feat=h, Frame) - SegFC
+        self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, padding="same"))
+        self.cond     =             Conv1d(gin_channels,    upsample_initial_channel, 1)
+
+        # MainNet - UpMRF
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
             self.ups.append(weight_norm(
                 ConvTranspose1d(upsample_initial_channel//(2**i), upsample_initial_channel//(2**(i+1)),
                                 k, u, padding=(k-u+1-i)//2,output_padding=1-i)))
-
+        self.ups.apply(init_weights)
         self.resblocks = nn.ModuleList()
+        ch = 0 # For typing
         for i in range(len(self.ups)):
             ch = upsample_initial_channel//(2**(i+1))
             for j, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
                 self.resblocks.append(ResBlock1(ch, k, d))
 
-        self.post_n_fft = gen_istft_n_fft
-        self.ups.apply(init_weights)
+        # PostNet :: (B, Feat, Frame) -> (B, Feat=band*2*freq, Frame)
         self.reflection_pad = torch.nn.ReflectionPad1d((1, 0))
-        self.reshape_pixelshuffle = []
- 
-        self.subband_conv_post = weight_norm(Conv1d(ch, self.subbands*(self.post_n_fft + 2), 7, 1, padding=3))
-        
+        self.subband_conv_post = weight_norm(Conv1d(ch, self.subbands * 2 * self.n_freq, 7, padding="same"))
         self.subband_conv_post.apply(init_weights)
-        self.cond = nn.Conv1d(256, 512, 1)
-        self.gen_istft_n_fft = gen_istft_n_fft
-        self.gen_istft_hop_size = gen_istft_hop_size
 
+        # iSTFT
+        self.stft = TorchSTFT(n_fft, hop_istft, n_fft)
 
-    def forward(self, x: Tensor, g: Tensor | None = None):
-      
-      stft = TorchSTFT(filter_length=self.gen_istft_n_fft, hop_length=self.gen_istft_hop_size, win_length=self.gen_istft_n_fft).to(x.device)
-      #print(x.device)
-      pqmf = PQMF(x.device)
-      
-      x = self.conv_pre(x)#[B, ch, length]
-      x = x + self.cond(g)  
-      for i in range(self.num_upsamples):
-          x = F.leaky_relu(x, modules.LRELU_SLOPE)
-          x = self.ups[i](x)
-          
-          
-          xs = None
-          for j in range(self.num_kernels):
-              if xs is None:
-                  xs = self.resblocks[i*self.num_kernels+j](x)
-              else:
-                  xs += self.resblocks[i*self.num_kernels+j](x)
-          x = xs / self.num_kernels
-          
-      x = F.leaky_relu(x)
-      x = self.reflection_pad(x)
-      x = self.subband_conv_post(x)
-      x = torch.reshape(x, (x.shape[0], self.subbands, x.shape[1]//self.subbands, x.shape[-1]))
+        # Band synthesis
+        self.pqmf = PQMF()
 
-      spec = torch.exp(x[:,:,:self.post_n_fft // 2 + 1, :])
-      phase = math.pi*torch.sin(x[:,:, self.post_n_fft // 2 + 1:, :])
+    def forward(self, x: Tensor, g: Tensor):
+        """Forward
+        
+        Args:
+            x        :: (B, Feat, Frame) - Latent series
+            g        :: (B, Feat, Frame) - Conditioning series
+        Returns:
+            y_g_hat  :: (B,    1, T)     - Generated waveform
+            y_mb_hat :: (B, Band, T')    - Generated subband waveforms
+        """
 
-      y_mb_hat = stft.inverse(torch.reshape(spec, (spec.shape[0]*self.subbands, self.gen_istft_n_fft // 2 + 1, spec.shape[-1])), torch.reshape(phase, (phase.shape[0]*self.subbands, self.gen_istft_n_fft // 2 + 1, phase.shape[-1])))
-      y_mb_hat = torch.reshape(y_mb_hat, (x.shape[0], self.subbands, 1, y_mb_hat.shape[-1]))
-      y_mb_hat = y_mb_hat.squeeze(-2)
+        # PreNet :: (B, Feat=i, Frame) & (B, Feat=gin, Frame) -> (B, Feat=h, Frame)
+        x = self.conv_pre(x) + self.cond(g)
 
-      y_g_hat = pqmf.synthesis(y_mb_hat)
+        # MainNet
+        for i in range(self.num_upsamples):
+            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = self.ups[i](x)
+            xs = None
+            for j in range(self.num_kernels):
+                if xs is None:
+                    xs = self.resblocks[i*self.num_kernels+j](x)
+                else:
+                    xs += self.resblocks[i*self.num_kernels+j](x)
+            x = xs / self.num_kernels
+        x = F.leaky_relu(x)
 
-      return y_g_hat, y_mb_hat
+        # PostNet :: (B, Feat, Frame) -> (B, Band, Feat=2freq, Frame)
+        x = self.reflection_pad(x)
+        x = self.subband_conv_post(x)
+        x = torch.reshape(x, (x.shape[0], self.subbands, x.shape[1]//self.subbands, x.shape[-1]))
+
+        # iSTFT
+        ## Split :: (B, Band, Feat=2freq, Frm) -> 2x (B, Band, Freq=freq, Frm)
+        spec, phase = torch.split(x, [self.n_freq]*2, dim=2)
+        ## Band batching :: (B=b, Band=band, Freq, Frm) -> (B=b*band, Freq, Frm)
+        spec  = torch.reshape(spec,  ( spec.shape[0] * self.subbands, self.n_freq,  spec.shape[-1]))
+        phase = torch.reshape(phase, (phase.shape[0] * self.subbands, self.n_freq, phase.shape[-1]))
+        ## Run :: (B, Freq, Frm) -> (B, 1, T')
+        spec  =           torch.exp(spec)
+        phase = math.pi * torch.sin(phase)
+        y_mb_hat = self.stft.inverse(spec, phase)
+        ## Band un-batching :: (B, 1, T') -> (B, Band, 1, T') -> (B, Band, T')
+        y_mb_hat = torch.reshape(y_mb_hat, (x.shape[0], self.subbands, 1, y_mb_hat.shape[-1])).squeeze(-2)
+
+        # Band synthesis :: (B, Band, T') -> (B, 1, T)
+        y_g_hat = self.pqmf.synthesis(y_mb_hat)
+
+        return y_g_hat, y_mb_hat
 
     def remove_weight_norm(self):
-      print('Removing weight norm...')
-      for l in self.ups:
-          remove_weight_norm(l)
-      for l in self.resblocks:
-          l.remove_weight_norm()
+        print('Removing weight norm...')
+        for l in self.ups:
+            remove_weight_norm(l)
+        for l in self.resblocks:
+            l.remove_weight_norm()
 
 
 class Multistream_iSTFT_Generator(torch.nn.Module):
-    def __init__(self, initial_channel, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=0):
-        super(Multistream_iSTFT_Generator, self).__init__()
-        # self.h = h
+    def __init__(self,
+                 initial_channel:          int, # Feature dimension size of latent input
+                 resblock_kernel_sizes,
+                 resblock_dilation_sizes,
+                 upsample_rates,
+                 upsample_initial_channel: int, # Feature dimension size of first hidden layer
+                 upsample_kernel_sizes,
+                 n_fft:                    int, # n_fft    of Synthesis iSTFT
+                 hop_istft:                int, # Hop size of Synthesis iSTFT
+                 subbands:                 int, # The number of subbands
+                 gin_channels:             int, # Feature dimension size of conditioning input
+        ):
+        super().__init__()
+
+        # Params
         self.subbands = subbands
+        self.n_freq = n_fft // 2 + 1
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
-        self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3))
 
+        # PreNet for latent :: (B, Feat=i,   Frame) -> (B, Feat=h, Frame) - Conv
+        # PreNet for cond   :: (B, Feat=gin, Frame) -> (B, Feat=h, Frame) - SegFC
+        self.conv_pre = weight_norm(Conv1d(initial_channel, upsample_initial_channel, 7, padding="same"))
+        self.cond     =             Conv1d(gin_channels,    upsample_initial_channel, 1)
+
+        # MainNet - UpMRF
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
             self.ups.append(weight_norm(
                 ConvTranspose1d(upsample_initial_channel//(2**i), upsample_initial_channel//(2**(i+1)),
                                 k, u, padding=(k-u+1-i)//2,output_padding=1-i)))#这里k和u不是成倍数的关系，对最终结果很有可能是有影响的，会有checkerboard artifacts的现象
-
+        self.ups.apply(init_weights)
         self.resblocks = nn.ModuleList()
+        ch = 0 # For typing
         for i in range(len(self.ups)):
             ch = upsample_initial_channel//(2**(i+1))
             for j, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
                 self.resblocks.append(ResBlock1(ch, k, d))
 
-        self.post_n_fft = gen_istft_n_fft
-        self.ups.apply(init_weights)
+        # PostNet
         self.reflection_pad = torch.nn.ReflectionPad1d((1, 0))
-        self.reshape_pixelshuffle = []
- 
-        self.subband_conv_post = weight_norm(Conv1d(ch, self.subbands*(self.post_n_fft + 2), 7, 1, padding=3))
-        
+        self.subband_conv_post = weight_norm(Conv1d(ch, self.subbands * 2 * self.n_freq, 7, padding="same"))
         self.subband_conv_post.apply(init_weights)
-        
-        self.gen_istft_n_fft = gen_istft_n_fft
-        self.gen_istft_hop_size = gen_istft_hop_size
 
+        # iSTFT
+        self.stft = TorchSTFT(n_fft, hop_istft, n_fft)
+
+        # Band synthesis
         updown_filter = torch.zeros((self.subbands, self.subbands, self.subbands)).float()
         for k in range(self.subbands):
             updown_filter[k, k, 0] = 1.0
         self.register_buffer("updown_filter", updown_filter)
-        self.multistream_conv_post = weight_norm(Conv1d(4, 1, kernel_size=63, bias=False, padding=get_padding(63, 1)))
+        self.multistream_conv_post = weight_norm(Conv1d(4, 1, 63, bias=False, padding=get_padding(63, 1)))
         self.multistream_conv_post.apply(init_weights)
-        self.cond = nn.Conv1d(256, 512, 1)
 
+    def forward(self, x: Tensor, g: Tensor):
+        """Forward
+        
+        Args:
+            x        :: (B, Feat, Frame) - Latent series
+            g        :: (B, Feat, Frame) - Conditioning series
+        Returns:
+            y_g_hat  :: (B,    1, T)     - Generated waveform
+            y_mb_hat :: (B, Band, T')    - Generated subband waveforms
+        """
 
-    def forward(self, x: Tensor, g: Tensor | None = None):
-      stft = TorchSTFT(filter_length=self.gen_istft_n_fft, hop_length=self.gen_istft_hop_size, win_length=self.gen_istft_n_fft).to(x.device)
-      # pqmf = PQMF(x.device)
+        # PreNet
+        x = self.conv_pre(x) + self.cond(g)
 
-      x = self.conv_pre(x)#[B, ch, length]
-      #print(x.size(),g.size())
-      x = x + self.cond(g) # g [b, 256, 1] => cond(g) [b, 512, 1] 
-      
-      for i in range(self.num_upsamples):
+        # MainNet
+        for i in range(self.num_upsamples):
+            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = self.ups[i](x)
+            xs = None
+            for j in range(self.num_kernels):
+                if xs is None:
+                    xs = self.resblocks[i*self.num_kernels+j](x)
+                else:
+                    xs += self.resblocks[i*self.num_kernels+j](x)
+            x = xs / self.num_kernels
+        x = F.leaky_relu(x)
 
-          #print(x.size(),g.size())
-          x = F.leaky_relu(x, modules.LRELU_SLOPE)
-          #print(x.size(),g.size())
-          x = self.ups[i](x)
-          
-          #print(x.size(),g.size())
-          xs = None
-          for j in range(self.num_kernels):
-              if xs is None:
-                  xs = self.resblocks[i*self.num_kernels+j](x)
-              else:
-                  xs += self.resblocks[i*self.num_kernels+j](x)
-          x = xs / self.num_kernels
-      #print(x.size(),g.size())    
-      x = F.leaky_relu(x)
-      x = self.reflection_pad(x)
-      x = self.subband_conv_post(x)
-      x = torch.reshape(x, (x.shape[0], self.subbands, x.shape[1]//self.subbands, x.shape[-1]))
-      #print(x.size(),g.size())
-      spec = torch.exp(x[:,:,:self.post_n_fft // 2 + 1, :])
-      phase = math.pi*torch.sin(x[:,:, self.post_n_fft // 2 + 1:, :])
-      #print(spec.size(),phase.size())
-      y_mb_hat = stft.inverse(torch.reshape(spec, (spec.shape[0]*self.subbands, self.gen_istft_n_fft // 2 + 1, spec.shape[-1])), torch.reshape(phase, (phase.shape[0]*self.subbands, self.gen_istft_n_fft // 2 + 1, phase.shape[-1])))
-      #print(y_mb_hat.size())
-      y_mb_hat = torch.reshape(y_mb_hat, (x.shape[0], self.subbands, 1, y_mb_hat.shape[-1]))
-      #print(y_mb_hat.size())
-      y_mb_hat = y_mb_hat.squeeze(-2)
-      #print(y_mb_hat.size())
-      y_mb_hat = F.conv_transpose1d(y_mb_hat, self.updown_filter* self.subbands, stride=self.subbands)#.cuda(x.device) * self.subbands, stride=self.subbands)
-      #print(y_mb_hat.size())
-      y_g_hat = self.multistream_conv_post(y_mb_hat)
-      #print(y_g_hat.size(),y_mb_hat.size())
-      return y_g_hat, y_mb_hat
+        # PostNet :: (B, Feat, Frame) -> (B, Band, Feat=2freq, Frame)
+        x = self.reflection_pad(x)
+        x = self.subband_conv_post(x)
+        x = torch.reshape(x, (x.shape[0], self.subbands, x.shape[1] // self.subbands, x.shape[-1]))
+
+        # iSTFT
+        ## Split :: (B, Band, Feat=2freq, Frm) -> 2x (B, Band, Freq=freq, Frm)
+        spec, phase = torch.split(x, [self.n_freq]*2, dim=2)
+        ## Band batching :: (B=b, Band=band, Freq, Frm) -> (B=b*band, Freq, Frm)
+        spec  = torch.reshape(spec,  ( spec.shape[0] * self.subbands, self.n_freq,  spec.shape[-1]))
+        phase = torch.reshape(phase, (phase.shape[0] * self.subbands, self.n_freq, phase.shape[-1]))
+        ## Run :: (B, Freq, Frm) -> (B, 1, T')
+        spec  =           torch.exp(spec)
+        phase = math.pi * torch.sin(phase)
+        y_mb_hat = self.stft.inverse(spec, phase)
+
+        # Band synthesis :: (B=b*band, 1, T') -> (B=b, Band=band, T') -> (B, 1, T)? - Learnable-filter synthesis
+        y_mb_hat = torch.reshape(y_mb_hat, (x.shape[0], self.subbands, 1, y_mb_hat.shape[-1])).squeeze(-2)
+        y_mb_hat = F.conv_transpose1d(y_mb_hat, self.updown_filter * self.subbands, stride=self.subbands)
+        y_g_hat = self.multistream_conv_post(y_mb_hat)
+
+        return y_g_hat, y_mb_hat
 
     def remove_weight_norm(self):
-      print('Removing weight norm...')
-      for l in self.ups:
-          remove_weight_norm(l)
-      for l in self.resblocks:
-          l.remove_weight_norm()
+        print('Removing weight norm...')
+        for l in self.ups:
+            remove_weight_norm(l)
+        for l in self.resblocks:
+            l.remove_weight_norm()
 
 
 class DiscriminatorP(torch.nn.Module):
@@ -503,17 +588,10 @@ class SynthesizerTrn(nn.Module):
     self.enc_spk = SpeakerEncoder(model_hidden_size=gin_channels, model_embedding_size=gin_channels)
 
     # Decoder
-    if mb_istft_vits:
-      print('Mutli-band iSTFT VITS')
-      self.dec = Multiband_iSTFT_Generator(  inter_channels, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
-    elif ms_istft_vits:
-      print('Mutli-stream iSTFT VITS')
-      self.dec = Multistream_iSTFT_Generator(inter_channels, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels=gin_channels)
-    elif istft_vits:
-      print('iSTFT-VITS')
-      self.dec = iSTFT_Generator(            inter_channels, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size,           gin_channels=gin_channels)
-    else:
-      print('Decoder Error in json file')
+    Dec = Multiband_iSTFT_Generator if mb_istft_vits else (Multistream_iSTFT_Generator if ms_istft_vits else (iSTFT_Generator if istft_vits else None))
+    if Dec is None: raise RuntimeError(f"Not-supported decoder flag: {mb_istft_vits}/{ms_istft_vits}/{istft_vits}")
+    print(f"Decoder type: {Dec.__name__}")
+    self.dec = Dec(inter_channels, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, subbands, gin_channels)
 
   def forward(self, unit: Tensor, spec: Tensor, mel: Tensor):
     """
