@@ -206,7 +206,7 @@ def evaluate(global_step: int, hps: QuickVCParams, net_g: SynthesizerTrn, loader
             break
         # Forward
         mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
-        y_hat = net_g.module.infer(c, mel)
+        y_hat = net_g.infer(c, mel)
         y_hat_mel = mel_spectrogram_torch(
           y_hat.squeeze(1).float(),
           hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
