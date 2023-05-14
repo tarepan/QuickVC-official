@@ -54,7 +54,7 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
         self.win_length    = hparams.data.win_length     # Spectrogram window length
         self.hop_length    = hparams.data.hop_length     # Frame hop length
 
-        self.audiopaths = load_filepaths(hps.data.training_files if mode == "train" else hps.data.validation_files)
+        self.audiopaths = load_filepaths(hparams.data.training_files if mode == "train" else hparams.data.validation_files)
 
         random.seed(1243)
         random.shuffle(self.audiopaths)
