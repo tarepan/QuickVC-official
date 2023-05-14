@@ -64,7 +64,6 @@ class ModelParams:
     upsample_rates:           list[int]
     upsample_initial_channel: int
     upsample_kernel_sizes:    list[int]
-    use_spectral_norm:  bool
     gin_channels:       int
 
 @dataclass

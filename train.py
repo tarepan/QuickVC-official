@@ -49,7 +49,7 @@ def run():
     # Model
     ##                          n_freq from n_fft         ,             frame-scale segment size
     net_g = SynthesizerTrn(hps.data.filter_length // 2 + 1, hps.train.segment_size // hps.data.hop_length, **hps.model).cuda()
-    net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda()
+    net_d = MultiPeriodDiscriminator().cuda()
     optim_g = AdamW(net_g.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
     optim_d = AdamW(net_d.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
     try:
