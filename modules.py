@@ -99,7 +99,7 @@ class WN(torch.nn.Module):
         g_l = zeros_like(x_in)
 
       # Activation :: (B, Feat=2h, Frame) & (B, Feat=2h, Frame) -> (B, Feat=h, Frame) - Gated activation unit with additive conditioning
-      acts = commons.fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
+      acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
 
       # Residual/Skip :: (B, Feat=h, Frame) -> (B, Feat=2h, Frame) | (B, Feat=h, Frame) - First half for Res, second half for skip
       res_skip_acts = self.res_skip_layers[i](acts)
