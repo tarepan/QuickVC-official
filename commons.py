@@ -60,7 +60,7 @@ def rand_slice_segments(series: Tensor, x_lengths: Tensor | None, segment_size: 
   """
   # Random segment start indice
   b, _, t = series.size()
-  series_lengths = x_lengths if x_lengths else t
+  series_lengths = x_lengths if x_lengths is not None else t
   indice_start_max = series_lengths - segment_size + 1
   indice_start = (torch.rand([b]).to(device=series.device) * indice_start_max).to(dtype=torch.long)
 
@@ -73,7 +73,7 @@ def rand_slice_segments(series: Tensor, x_lengths: Tensor | None, segment_size: 
 def rand_spec_segments(series: Tensor, x_lengths: Tensor | None, segment_size: int) -> tuple[Tensor, Tensor]:
   # Random segment start indice
   b, _, t = series.size()
-  series_lengths = x_lengths if x_lengths else t
+  series_lengths = x_lengths if x_lengths is not None else t
   indice_start_max = series_lengths - segment_size # +1 (in rand_slice_segments)
   indice_start = (torch.rand([b]).to(device=series.device) * indice_start_max).to(dtype=torch.long)
 
