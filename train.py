@@ -104,7 +104,7 @@ def train_and_evaluate(
         mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
         with autocast(enabled=hps.train.fp16_run):
             # G_Forward
-            y_hat, y_hat_mb, ids_slice, z_mask, (_, z_p, m_p, logs_p, _, logs_q) = net_g(c, spec, mel)
+            y_hat, y_hat_mb, ids_slice, (_, z_p, m_p, logs_p, _, logs_q) = net_g(c, spec, mel)
             # G_Loss_1/2
             mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
             y_mel = commons.slice_segments(mel, ids_slice, hps.train.segment_size // hps.data.hop_length)
@@ -132,7 +132,7 @@ def train_and_evaluate(
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
             with autocast(enabled=False):
                 loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
-                loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * hps.train.c_kl
+                loss_kl = kl_loss(z_p, logs_q, m_p, logs_p) * hps.train.c_kl
                 loss_fm = feature_loss(fmap_r, fmap_g)
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
                 if hps.model.mb_istft_vits == True:
