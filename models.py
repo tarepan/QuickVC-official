@@ -611,8 +611,6 @@ class SynthesizerTrn(nn.Module):
         m_q
         logs_q
     """
-    # Effective lengths of each series - All effective :: (B,)
-    spec_lengths = (torch.ones(spec.size(0)) * spec.size(-1)).to(spec.device)
 
     # Mel-to-Emb
     g = self.enc_spk(mel.transpose(1,2)).unsqueeze(-1)
@@ -622,7 +620,7 @@ class SynthesizerTrn(nn.Module):
     z, m_q, logs_q = self.enc_q(spec, g=g)
     z_p = self.flow(z, g=g)
     # Zsd-to-Wave
-    z_slice, ids_slice = commons.rand_slice_segments(z, spec_lengths, self.segment_size)
+    z_slice, ids_slice = commons.rand_slice_segments(z, self.segment_size)
     o, o_mb = self.dec(z_slice, g=g)
 
     return o, o_mb, ids_slice, (z, z_p, m_p, logs_p, m_q, logs_q)

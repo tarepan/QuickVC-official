@@ -13,18 +13,6 @@ def init_weights(m, mean=0.0, std=0.01):
 
 def get_padding(kernel_size, dilation=1):
   return int((kernel_size*dilation - dilation)/2)
-
-
-def sequence_mask(length: Tensor, max_length: int) -> Tensor:
-  """
-  Args:
-      length :: ()
-      max_length   - 
-  Returns:
-      :: BoolTensor[()] - Mask
-  """
-  x = torch.arange(max_length, dtype=length.dtype, device=length.device)
-  return x.unsqueeze(0) < length.unsqueeze(1)
 #### /Networks ######################################################################################################
 
 
@@ -47,12 +35,11 @@ def slice_segments(series: Tensor, indice_start: Tensor, segment_size: int):
   return ret
 
 
-def rand_slice_segments(series: Tensor, x_lengths: Tensor | None, segment_size: int) -> tuple[Tensor, Tensor]:
+def rand_slice_segments(series: Tensor, segment_size: int) -> tuple[Tensor, Tensor]:
   """Slice a segment randomly from a series.
 
   Args:
     series       :: (B, Feat, Frame)     - Slice-target series
-    x_lengths    :: (B,)                 - Effective length of a series
     segment_size                         - Segment length
   Returns:
     segment      :: (B, Feat, Frame=seg) - Sliced segments
@@ -60,8 +47,7 @@ def rand_slice_segments(series: Tensor, x_lengths: Tensor | None, segment_size: 
   """
   # Random segment start indice
   b, _, t = series.size()
-  series_lengths = x_lengths if x_lengths is not None else t
-  indice_start_max = series_lengths - segment_size + 1
+  indice_start_max = t - segment_size + 1
   indice_start = (torch.rand([b]).to(device=series.device) * indice_start_max).to(dtype=torch.long)
 
   # Slice
