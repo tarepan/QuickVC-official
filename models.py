@@ -4,7 +4,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn import Conv1d, ConvTranspose1d, Conv2d
-from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
+from torch.nn.utils import weight_norm, remove_weight_norm
 
 import commons
 from commons import init_weights, get_padding
@@ -36,11 +36,10 @@ class ResidualCouplingBlock(nn.Module):
       self.flows.append(modules.ResidualCouplingLayer(channels, hidden_channels, kernel_size, n_layers, gin_channels))
       self.flows.append(modules.Flip())
 
-  def forward(self, x: Tensor, x_mask: Tensor, g: Tensor | None = None, reverse: bool = False):
+  def forward(self, x: Tensor, g: Tensor | None = None, reverse: bool = False):
     """
     Args:
         x      :: (B, Feat, Frame) - Input
-        x_mask
         g      :: (B, Feat, Frame) - Condioning input
         reverse                    - Whether to 'reverse' flow or not
     Returns:
@@ -48,7 +47,7 @@ class ResidualCouplingBlock(nn.Module):
     """
     flows = self.flows if not reverse else reversed(self.flows)
     for flow in flows:
-      x = flow(x, x_mask, g=g, reverse=reverse)
+      x = flow(x, g=g, reverse=reverse)
     return x
 
 
@@ -75,7 +74,7 @@ class PosteriorEncoder(nn.Module):
     self.enc  = modules.WN(hidden_channels, kernel_size, n_layers, gin_channels)
     self.proj = Conv1d(hidden_channels, 2 * out_channels, 1)
 
-  def forward(self, x: Tensor, x_lengths: Tensor, g: Tensor | None = None):
+  def forward(self, x: Tensor, g: Tensor | None = None):
     """
     Args:
       x         :: (B, Feat=i, Frame) - Input series
@@ -83,19 +82,20 @@ class PosteriorEncoder(nn.Module):
       g                               - Conditioning input
     Returns:
       z         :: (B, Feat=o, Frame) - Sampled series
+      m
+      logs
+
     """
-    # Generate mask
-    x_mask = commons.sequence_mask(x_lengths, x.size(2)).unsqueeze(1).to(x.dtype)
 
     # :: (B, Feat=i, Frame) -> (B, Feat=2o, Frame)
-    x = self.pre(x) * x_mask
-    x = self.enc(x, x_mask, g=g)
-    stats = self.proj(x) * x_mask
+    x = self.pre(x)
+    x = self.enc(x, g=g)
+    stats = self.proj(x)
 
     # Normal distribution :: (B, Feat=2o, Frame) -> (B, Feat=o, Frame) - z ~ N(z|m,s)
     m, logs = torch.split(stats, self.out_channels, dim=1)
-    z = (m + torch.randn_like(m) * torch.exp(logs)) * x_mask
-    return z, m, logs, x_mask
+    z = m + torch.randn_like(m) * torch.exp(logs)
+    return z, m, logs
 
 
 class iSTFT_Generator(torch.nn.Module):
@@ -564,8 +564,8 @@ class SynthesizerTrn(nn.Module):
     gen_istft_n_fft:          int,                # Decoder
     gen_istft_hop_size:       int,                # Decoder
     istft_vits:               bool       = False, # Decoder, Whether to use plain iSTFTNet Decoder
-    ms_istft_vits:            bool       = False, # Decoder, Whether to use MS-iSTFTNet Decoder
-    mb_istft_vits:            bool       = False, # Decoder, Whether to use MB-iSTFTNet Decoder
+    ms_istft_vits:            bool       = False, # Decoder, Whether to use MS-iSTFTNet    Decoder
+    mb_istft_vits:            bool       = False, # Decoder, Whether to use MB-iSTFTNet    Decoder
     subbands:                 bool | int = False, # Decoder, (maybe) The number of subbands
     gin_channels:   int = 0,     # Feature dimension size of conditioning series
     **kwargs,                    # (Not used, for backward-compatibility)   # pyright: ignore [reportUnknownParameterType, reportMissingParameterType]
@@ -603,7 +603,6 @@ class SynthesizerTrn(nn.Module):
       o
       o_mb
       ids_slice
-      spec_mask - Mask, used for loss masking
       (
         z
         z_p
@@ -612,22 +611,21 @@ class SynthesizerTrn(nn.Module):
         m_q
         logs_q
     """
-    # Effective lengths of each series - TODO: All effective? :: (B,)
-    unit_lengths = (torch.ones(unit.size(0)) * unit.size(-1)).to(unit.device)
+    # Effective lengths of each series - All effective :: (B,)
     spec_lengths = (torch.ones(spec.size(0)) * spec.size(-1)).to(spec.device)
 
     # Mel-to-Emb
     g = self.enc_spk(mel.transpose(1,2)).unsqueeze(-1)
     # Unit-to-Zsi
-    _, m_p, logs_p, _ = self.enc_p(unit, unit_lengths)
+    _, m_p, logs_p = self.enc_p(unit)
     # Spec-to-Zsd-to-Zsi
-    z, m_q, logs_q, spec_mask = self.enc_q(spec, spec_lengths, g=g)
-    z_p = self.flow(z, spec_mask, g=g)
+    z, m_q, logs_q = self.enc_q(spec, g=g)
+    z_p = self.flow(z, g=g)
     # Zsd-to-Wave
     z_slice, ids_slice = commons.rand_slice_segments(z, spec_lengths, self.segment_size)
     o, o_mb = self.dec(z_slice, g=g)
 
-    return o, o_mb, ids_slice, spec_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
+    return o, o_mb, ids_slice, (z, z_p, m_p, logs_p, m_q, logs_q)
 
   def infer(self, unit: Tensor, mel: Tensor) -> Tensor:
     """
@@ -637,15 +635,13 @@ class SynthesizerTrn(nn.Module):
     Returns:
            :: () - Infered Waveform
     """
-    # Effective lengths of each unit series in `c`
-    c_lengths = (torch.ones(unit.size(0)) * unit.size(-1)).to(unit.device)
 
     # Speaker embedding
     g = self.enc_spk.embed_utterance(mel.transpose(1,2)).unsqueeze(-1)
 
     # Enc-Dec
-    z_p, _, _, c_mask = self.enc_p(unit, c_lengths)
-    z = self.flow(z_p, c_mask, g=g, reverse=True)
-    o, _ = self.dec(z * c_mask, g=g)
+    z_p, _, _ = self.enc_p(unit)
+    z = self.flow(z_p, g=g, reverse=True)
+    o, _ = self.dec(z, g=g)
 
     return o

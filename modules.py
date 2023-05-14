@@ -66,11 +66,10 @@ class WN(torch.nn.Module):
       res_skip_channels = 2 * hidden_channels if i < n_layers - 1 else hidden_channels
       self.res_skip_layers.append(weight_norm(Conv1d(hidden_channels,   res_skip_channels,           1, padding="same")))
 
-  def forward(self, x: Tensor, x_mask, g: Tensor | None = None):
+  def forward(self, x: Tensor, g: Tensor | None = None):
     """
     Args:
       x      :: (B, Feat=h, Frame) - Input series
-      x_mask ::                    -
       g      :: maybe (B, Cond, Frame) - Conditioning series
     Returns:
              :: (B, Feat=h, Frame)
@@ -105,14 +104,14 @@ class WN(torch.nn.Module):
       res_skip_acts = self.res_skip_layers[i](acts)
       ## Residual connection :: (B, Feat=h, Frame) + (B, Feat=h, Frame) -> (B, Feat=h, Frame)
       if i < self.n_layers - 1:
-        x = (x + res_skip_acts[:, :self.hidden_channels]) * x_mask
+        x = x + res_skip_acts[:, :self.hidden_channels]
       ## Skip connection :: (B, Feat=h, Frame) + (B, Feat=h, Frame) -> (B, Feat=h, Frame)
         output = output + res_skip_acts[:, self.hidden_channels:]
       else:
         # :: (B, Feat=h, Frame) + (B, Feat=h, Frame) -> (B, Feat=h, Frame) - Skip connection only for last layer
         output = output + res_skip_acts
 
-    return output * x_mask
+    return output
 
   def remove_weight_norm(self):
     if self.gin_channels != 0:
@@ -165,7 +164,7 @@ class ResBlock1(torch.nn.Module):
 #### Flow modules ##############################################################
 class Flip(nn.Module):
   """Flow flip."""
-  def forward(self, x: Tensor, *args, reverse: bool = False, **kwargs):
+  def forward(self, x: Tensor, reverse: bool = False, **kwargs):
     """:: (B, Feat, T) -> (B, Feat, T)"""
     x = torch.flip(x, [1])
     return x
@@ -197,11 +196,10 @@ class ResidualCouplingLayer(nn.Module):
     self.post.weight.data.zero_()
     self.post.bias.data.zero_()
 
-  def forward(self, x: Tensor, x_mask: Tensor, g: Tensor | None = None, reverse: bool = False):
+  def forward(self, x: Tensor, g: Tensor | None = None, reverse: bool = False):
     """
     Args:
       x       :: (B, Feat=i, T) - Input
-      x_mask
       g                         - Conditioning input
       reverse                   - Whether to 'reverse' flow or not
     Returns:
@@ -211,16 +209,14 @@ class ResidualCouplingLayer(nn.Module):
     x0, x1 = torch.split(x, [self.half_channels, self.half_channels], 1)
 
     # SegFC-WN-SegFC :: (B, Feat=i/2, T) -> (B, Feat=i/2, T)
-    h = self.pre(x0) * x_mask
-    h = self.enc(h, x_mask, g=g)
-    m = self.post(h) * x_mask
+    h = self.pre(x0)
+    h = self.enc(h, g=g)
+    m = self.post(h)
 
-    # Normal distribution :: (B, Feat=i/2, T) & (B, Feat=i/2, T) -> (B, Feat=i/2, T) - (?) sampling-like magic. You should study Flow.
-    if not reverse:
-      x1 = m + x1 * x_mask
-      # logdet = torch.sum(logs, [1,2])
-    else:
-      x1 = (x1 - m) * x_mask
+    # Change of variable :: (B, Feat=i/2, T) & (B, Feat=i/2, T) -> (B, Feat=i/2, T) - (?) Magic. You should study Flow.
+    x1 = (m + x1) if not reverse else (x1 - m)
+    # if not reverse:
+    #   logdet = torch.sum(logs, [1,2])
 
     # Cat :: (B, Feat=i/2, T) & (B, Feat=i/2, T) -> (B, Feat=i, T)
     x = torch.cat([x0, x1], 1)
