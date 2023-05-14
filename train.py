@@ -10,8 +10,9 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.tensorboard.writer import SummaryWriter
 from torch.cuda.amp import autocast, GradScaler
-from pqmf import PQMF
+import torch.distributed
 
+from pqmf import PQMF
 import commons
 import utils
 from utils import QuickVCParams
@@ -23,6 +24,11 @@ from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 
 def run():
     """Training runner"""
+
+    # Backward-compatibility
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '65520'
+    torch.distributed.init_process_group(backend='nccl', init_method='env://', world_size=1, rank=0)
 
     # Arguments and hyper parameters
     hps = utils.get_hparams()
