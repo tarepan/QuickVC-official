@@ -192,20 +192,22 @@ def evaluate(global_step: int, hps: QuickVCParams, net_g: SynthesizerTrn, loader
     with torch.no_grad():
         # Data - only the first sample
         #   Unit series :: (B=1, Feat, Frame), Linear spectrogram :: (B=1, Freq, Frame), Waveform :: (B=1, 1, T)
-        for c, spec, y in loader:
-            c, spec, y = c[:1].cuda(), spec[:1].cuda(), y[:1].cuda()
-            break
-        # Forward
-        mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
-        y_hat = net_g.infer(c, mel)
-        y_hat_mel = mel_spectrogram_torch(
-          y_hat.squeeze(1).float(),
-          hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
+        for i, (c, spec, y) in enumerate(loader):
+            c, spec, y = c.cuda(), spec.cuda(), y.cuda()
+            # Forward
+            mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
+            y_hat = net_g.infer(c, mel)
+            y_hat_mel = mel_spectrogram_torch(
+            y_hat.squeeze(1).float(),
+            hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
 
-    # Log
-    image_dict = {"gen/mel": utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy()), "gt/mel": utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())}
-    audio_dict = {"gen/audio": y_hat[0],                                                  "gt/audio": y[0]}
-    utils.summarize(writer=writer, global_step=global_step, images=image_dict, audios=audio_dict, audio_sampling_rate=hps.data.sampling_rate)
+            # Log
+            image_dict = {f"gen/mel_{i}": utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy()), f"gt/mel_{i}": utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())}
+            audio_dict = {f"gen/audio_{i}": y_hat[0],                                                  f"gt/audio_{i}": y[0]}
+            utils.summarize(writer=writer, global_step=global_step, images=image_dict, audios=audio_dict, audio_sampling_rate=hps.data.sampling_rate)
+
+            if i > 5:
+                break
 
     net_g.train()
 
