@@ -431,8 +431,8 @@ class DiscriminatorP(torch.nn.Module):
         ])
         self.conv_post = weight_norm(Conv2d(1024, 1, (3, 1), 1, padding=(1, 0)))
 
-    def forward(self, x: Tensor):
-        fmap = []
+    def forward(self, x: Tensor) -> tuple[Tensor, list[Tensor]]:
+        fmap: list[Tensor] = []
 
         # 1d to 2d
         b, c, t = x.shape
@@ -467,8 +467,8 @@ class DiscriminatorS(torch.nn.Module):
         ])
         self.conv_post = weight_norm(Conv1d(1024, 1, 3, 1, padding=1))
 
-    def forward(self, x: Tensor):
-        fmap = []
+    def forward(self, x: Tensor) -> tuple[Tensor, list[Tensor]]:
+        fmap: list[Tensor] = []
         for l in self.convs:
             x = l(x)
             x = F.leaky_relu(x, modules.LRELU_SLOPE)
@@ -491,7 +491,7 @@ class MultiPeriodDiscriminator(torch.nn.Module):
         discs = discs + [DiscriminatorP(i) for i in periods]
         self.discriminators = nn.ModuleList(discs)
 
-    def forward(self, y: Tensor, y_hat: Tensor):
+    def forward(self, y: Tensor, y_hat: Tensor) -> tuple[list[Tensor], list[Tensor], list[list[Tensor]], list[list[Tensor]]]:
         y_d_rs, y_d_gs, fmap_rs, fmap_gs = [], [], [], []
         for _, d in enumerate(self.discriminators):
             y_d_r, fmap_r = d(y)

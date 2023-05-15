@@ -1,27 +1,28 @@
-import torch 
+"""Loss functions."""
+
+import torch
+from torch import Tensor
 
 from stft_loss import MultiResolutionSTFTLoss
 
 
-def feature_loss(fmap_r, fmap_g):
+def feature_loss(fmap_r: list[list[Tensor]], fmap_g: list[list[Tensor]]) -> Tensor:
   loss = 0
   for dr, dg in zip(fmap_r, fmap_g):
     for rl, gl in zip(dr, dg):
-      rl = rl.float().detach()
-      gl = gl.float()
+      rl = rl.detach()
       loss += torch.mean(torch.abs(rl - gl))
 
-  return loss * 2 
+  return loss * 2
 
 
-def discriminator_loss(disc_real_outputs, disc_generated_outputs):
+def discriminator_loss(disc_real_outputs: list[Tensor], disc_generated_outputs: list[Tensor]) -> tuple[Tensor, list[float], list[float]]:
   loss = 0
-  r_losses = []
-  g_losses = []
+  r_losses: list[float] = []
+  g_losses: list[float] = []
+
   for dr, dg in zip(disc_real_outputs, disc_generated_outputs):
-    dr = dr.float()
-    dg = dg.float()
-    r_loss = torch.mean((1-dr)**2)
+    r_loss = torch.mean((1 - dr)**2)
     g_loss = torch.mean(dg**2)
     loss += (r_loss + g_loss)
     r_losses.append(r_loss.item())
@@ -30,19 +31,18 @@ def discriminator_loss(disc_real_outputs, disc_generated_outputs):
   return loss, r_losses, g_losses
 
 
-def generator_loss(disc_outputs):
+def generator_loss(disc_outputs: list[Tensor]) -> tuple[Tensor, list[Tensor]]:
   loss = 0
-  gen_losses = []
+  gen_losses: list[Tensor] = []
   for dg in disc_outputs:
-    dg = dg.float()
-    l = torch.mean((1-dg)**2)
+    l = torch.mean((1 - dg)**2)
     gen_losses.append(l)
     loss += l
 
   return loss, gen_losses
 
 
-def kl_loss(z_p, logs_q, m_p, logs_p):
+def kl_loss(z_p: Tensor, logs_q: Tensor, m_p: Tensor, logs_p: Tensor) -> Tensor:
   """
   Args:
     z_p :: (B, Feat, Frame)
@@ -50,15 +50,8 @@ def kl_loss(z_p, logs_q, m_p, logs_p):
     m_p: [b, h, t_t]
     logs_p: [b, h, t_t]
   """
-  z_p = z_p.float()
-  logs_q = logs_q.float()
-  m_p = m_p.float()
-  logs_p = logs_p.float()
-
   kl = logs_p - logs_q - 0.5
   kl += 0.5 * ((z_p - m_p)**2) * torch.exp(-2. * logs_p)
-
-  # Average
   l = torch.mean(kl)
 
   return l
