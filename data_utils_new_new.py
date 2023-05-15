@@ -10,6 +10,7 @@ from torch import Tensor, FloatTensor
 import torch.utils.data
 from torch.utils.data.distributed import DistributedSampler
 from scipy.io.wavfile import read
+import librosa
 
 from commons import slice_segments
 from mel_processing import spectrogram_torch
@@ -29,10 +30,19 @@ def load_filepaths(filename: str) -> list[list[str]]:
   return filepaths
 
 
-def load_wav_to_torch(full_path: str) -> tuple[FloatTensor, int]:
-  # SciPy read
-  sampling_rate, data = read(full_path)
-  return FloatTensor(data.astype(np.float32)), sampling_rate
+def load_wav_to_torch(full_path: str) -> tuple[Tensor, int]:
+    """Load audio.
+    
+    Args:
+        full_path                    - Audio path
+    Returns:
+        audio_norm    :: (Feat=1, T) - Audio, in range [-1, 1]
+        sampling_rate                - Audio sampling rate
+    """
+    audio, sampling_rate = librosa.load(full_path, sr=None, mono=True)
+    audio = FloatTensor(audio.astype(np.float32)).unsqueeze(0)
+
+    return audio, sampling_rate
 
 
 class UnitAudioSpecLoader(torch.utils.data.Dataset):
@@ -48,7 +58,6 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
 
     """
     def __init__(self, mode: Literal["train", "eval"], hparams: QuickVCParams):
-        self.max_wav_value = hparams.data.max_wav_value  # Maximum amplitude in the audio format
         self.sampling_rate = hparams.data.sampling_rate  # For validation
         self.filter_length = hparams.data.filter_length  # Spectrogram n_fft
         self.win_length    = hparams.data.win_length     # Spectrogram window length
@@ -73,14 +82,12 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
         Args:
             filename               - File path
         Returns:
-            c          :: FloatTensor[] - Unit series,            from    f'{filename.parent.name}/{filename.stem}.npy'
-            spec       :: FloatTensor[] - Spectrogram             from/to f'{filename.parent.name}/{filename.stem}.spec.pt'
-            audio_norm :: FloatTensor[] - Audio in range [-1, 1], from    f'{filename.parent.name}/{filename.stem}.wav'
+            c     :: FloatTensor[           ] - Unit series,            from    f'{filename.parent.name}/{filename.stem}.npy'
+            spec  :: FloatTensor[           ] - Spectrogram             from/to f'{filename.parent.name}/{filename.stem}.spec.pt'
+            audio :: FloatTensor[(Feat=1, T)] - Audio in range [-1, 1], from    f'{filename.parent.name}/{filename.stem}.wav'
         """
-        # audio_norm :: () - Audio in range [-1, 1]
+        # audio :: (Feat=1, T) - Audio in range [-1, 1]
         audio, sampling_rate = load_wav_to_torch(filename)
-        audio_norm = audio / self.max_wav_value
-        audio_norm = audio_norm.unsqueeze(0)
         assert sampling_rate == self.sampling_rate, f"{sampling_rate} SR doesn't match target {self.sampling_rate} SR"
 
         # spec :: () - Linear spectrogram
@@ -88,15 +95,14 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
         if os.path.exists(spec_filename):
             spec = torch.load(spec_filename)
         else:
-            spec = spectrogram_torch(audio_norm, self.filter_length, self.hop_length, self.win_length, center=False)
-            spec = torch.squeeze(spec, 0)
+            spec = spectrogram_torch(audio, self.filter_length, self.hop_length, self.win_length, center=False).squeeze(0)
             torch.save(spec, spec_filename)
 
         # c :: () - Unit series
         c = np.load(filename.replace(".wav", ".npy"))
         c = torch.FloatTensor(c.transpose(1,0))
 
-        return c, spec, audio_norm
+        return c, spec, audio
 
     def __getitem__(self, index: int):
         return self.get_audio(self.audiopaths[index][0])

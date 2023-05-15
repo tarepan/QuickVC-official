@@ -41,7 +41,6 @@ class TrainParams:
 class DataParams:
     training_files:   str
     validation_files: str
-    max_wav_value:    float
     sampling_rate:    int
     filter_length:    int
     hop_length:       int
