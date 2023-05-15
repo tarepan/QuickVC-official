@@ -100,6 +100,9 @@ def train_and_evaluate(
     train_loader, eval_loader = loaders
     writer, writer_eval = writers
 
+    if hps.model.mb_istft_vits:
+        pqmf = PQMF()
+
     net_g.train()
     net_d.train()
     for batch_idx, (c, spec, y) in enumerate(train_loader):
@@ -107,21 +110,14 @@ def train_and_evaluate(
         # Data - Unit series :: (B, Feat, Frame), Linear spectrogram :: (B, Freq, Frame), Waveform :: (B, 1, T)
         c, spec, y = c.cuda(non_blocking=True), spec.cuda(non_blocking=True), y.cuda(non_blocking=True)
 
+        # Common_Forward
+        # TODO: preprocessing. Loader becomes heavy, but in both case, same size of mel is loaded on GPU memory.)
         mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
         with autocast(enabled=hps.train.fp16_run):
-            # G_Forward
             y_hat, y_hat_mb, ids_slice, (_, z_p, m_p, logs_p, _, logs_q) = net_g(c, spec, mel)
-            # G_Loss_1/2
-            mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
-            y_mel = commons.slice_segments(mel, ids_slice, hps.train.segment_size // hps.data.hop_length)
-            y_hat_mel = mel_spectrogram_torch(y_hat.squeeze(1), 
-                hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
-
             y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size)
-
-            # D_Forward
+        # D_Forward/Loss
             y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
-            # D_Loss
             with autocast(enabled=False):
                 loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
                 loss_disc_all = loss_disc
@@ -132,17 +128,18 @@ def train_and_evaluate(
         # D_Optim
         scaler.step(optim_d)
 
-
+        # G_Loss
         with autocast(enabled=hps.train.fp16_run):
-            # G_Loss_2/2
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
+            y_hat_mel = mel_spectrogram_torch(y_hat.squeeze(1), 
+                hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
+            y_mel = commons.slice_segments(mel, ids_slice, hps.train.segment_size // hps.data.hop_length)
             with autocast(enabled=False):
-                loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
-                loss_kl = kl_loss(z_p, logs_q, m_p, logs_p) * hps.train.c_kl
-                loss_fm = feature_loss(fmap_r, fmap_g)
-                loss_gen, losses_gen = generator_loss(y_d_hat_g)
-                if hps.model.mb_istft_vits == True:
-                    pqmf = PQMF()
+                loss_mel = hps.train.c_mel * F.l1_loss(y_mel, y_hat_mel)
+                loss_kl  = hps.train.c_kl  * kl_loss(z_p, logs_q, m_p, logs_p)
+                loss_fm  =                   feature_loss(fmap_r, fmap_g)
+                loss_gen, losses_gen =       generator_loss(y_d_hat_g)
+                if hps.model.mb_istft_vits:
                     y_mb = pqmf.analysis(y)
                     loss_subband = subband_stft_loss(hps, y_mb, y_hat_mb)
                 else:
