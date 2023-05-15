@@ -22,6 +22,7 @@
   "data": {
     "training_files":"./dataset/train.txt",
     "validation_files":"./dataset/test.txt",
+    "adress_data_root": "/content/gdrive/MyDrive/ML_data",
     "sampling_rate": 16000,
     "filter_length": 1280,
     "hop_length": 320,

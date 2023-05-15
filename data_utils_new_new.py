@@ -9,25 +9,39 @@ import torch
 from torch import Tensor, FloatTensor
 import torch.utils.data
 from torch.utils.data.distributed import DistributedSampler
-from scipy.io.wavfile import read
 import librosa
+from speechcorpusy import load_preset
 
 from commons import slice_segments
 from mel_processing import spectrogram_torch
 from utils import QuickVCParams
 
 
-def load_filepaths(filename: str) -> list[list[str]]:
-  """
-  Args:
-    filename - The file containing file lists
+def load_filepaths(train_eval: str, dataset_identity: str, hpm: QuickVCParams) -> list[list[str]]:
+    """
 
-  single line example: './dataset/vctk-16k/vctk-16k/p262/p262_350.wav'
-  """
-  split = "|"
-  with open(filename, encoding='utf-8') as f:
-    filepaths = [line.strip().split(split) for line in f]
-  return filepaths
+    single line example: './dataset/vctk-16k/vctk-16k/p262/p262_350.wav'
+
+    Args:
+        train_eval       - Train or Eval
+        dataset_identity - The file containing file lists | Dataset specifier (hack)
+        corpus_root      - (Extended mode) Root adress of corpus
+    Returns:
+        filepaths        -
+    """
+    if dataset_identity[-4:] == ".txt":
+        # Default VCTK
+        split = "|"
+        with open(dataset_identity, encoding='utf-8') as f:
+            filepaths = [line.strip().split(split) for line in f]
+        return filepaths
+    else:
+        # Extended by speechcorpusy
+        corpus = load_preset(dataset_identity, hpm.data.adress_data_root, download=False)
+        ids_full = corpus.get_identities()
+        ids = ids_full[:-10] if train_eval == "train" else ids_full[-10:]
+        filepaths: list[list[str]] = [[str(corpus.get_item_path(id).with_suffix(".16k.wav"))] for id in ids]
+        return filepaths
 
 
 def load_wav_to_torch(full_path: str) -> tuple[Tensor, int]:
@@ -63,7 +77,8 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
         self.win_length    = hparams.data.win_length     # Spectrogram window length
         self.hop_length    = hparams.data.hop_length     # Frame hop length
 
-        self.audiopaths = load_filepaths(hparams.data.training_files if mode == "train" else hparams.data.validation_files)
+        dataset_identity = hparams.data.training_files if mode == "train" else hparams.data.validation_files
+        self.audiopaths = load_filepaths(mode, dataset_identity, hparams)
 
         random.seed(1243)
         random.shuffle(self.audiopaths)
@@ -71,6 +86,7 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
 
     def _calculate_frame_lengths(self):
         """Store spec lengths for Bucketing."""
+        # TODO: more general length check
         # wav_length ~= file_size / (wav_channels * Bytes per dim) = file_size / (1 * 2)
         lengths: list[int] = []
         for audiopath in self.audiopaths:

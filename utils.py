@@ -41,6 +41,7 @@ class TrainParams:
 class DataParams:
     training_files:   str
     validation_files: str
+    adress_data_root: str
     sampling_rate:    int
     filter_length:    int
     hop_length:       int
