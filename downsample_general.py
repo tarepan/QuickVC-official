@@ -8,11 +8,12 @@ from pathlib import Path
 import numpy as np
 from scipy.io import wavfile
 import librosa
+from tqdm import tqdm
 
 
 def process(in_dir: Path):
     target_sr = 16000
-    for p in in_dir.glob("**/*.wav"):
+    for p in tqdm(in_dir.glob("**/*.wav")):
         # Load
         wav, source_sr = librosa.load(p, mono=True)
 
@@ -41,4 +42,4 @@ if __name__ == "__main__":
     parser.add_argument("--in_dir",  type=str, default="./tmp", help="path to source dir")
     args = parser.parse_args()
 
-    process(args.in_dir)
+    process(Path(args.in_dir))
