@@ -614,7 +614,7 @@ class SynthesizerTrn(nn.Module):
     # Unit-to-Zsi
     _, m_p, logs_p = self.enc_p(unit)
     # Spec-to-Zsd-to-Zsi
-    z, m_q, logs_q = self.enc_q(spec, g=g)
+    z, m_q, logs_q = self.enc_q(spec, cond=g)
     z_p = self.flow(z, g=g)
     # Zsd-to-Wave
     z_slice, ids_slice = commons.rand_slice_segments(z, self.segment_size)
