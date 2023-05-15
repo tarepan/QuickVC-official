@@ -17,7 +17,12 @@ def encode_dataset(args):
 
     print(f"Encoding dataset at {args.in_dir}")
     # All audio files under the `in_dir`
-    for in_path in tqdm(list(args.in_dir.rglob(f"*{args.extension}"))):
+    if not args.suffix_16k:
+        # default
+        paths = list(args.in_dir.rglob(f"*{args.extension}"))
+    else:
+        paths = Path(args.in_dir).glob("**/*.16k.wav")
+    for in_path in tqdm(paths):
         out_path = args.out_dir / in_path.relative_to(args.in_dir)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -38,6 +43,7 @@ if __name__ == "__main__":
     parser.add_argument("model",                      help="available models (HuBERT-Soft or HuBERT-Discrete)", choices=["soft", "soft"])
     parser.add_argument("in_dir",  metavar="in-dir",  help="path to the dataset directory.",                 type=Path)
     parser.add_argument("out_dir", metavar="out-dir", help="path to the output directory.",                  type=Path)
-    parser.add_argument("--extension",                help="extension of the audio files.",  default=".wav", type=str)
+    parser.add_argument("--extension",                help="extension of the audio files.",   default=".wav", type=str)
+    parser.add_argument("--suffix_16k",               help="Convert only '.16k.wav' files.",  action="store_true")
     args = parser.parse_args()
     encode_dataset(args)
