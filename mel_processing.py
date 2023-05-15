@@ -60,6 +60,10 @@ def spectrogram_torch(y, n_fft, hop_size, win_size, center=False):
 
 
 def spec_to_mel_torch(spec, n_fft, num_mels, sampling_rate, fmin, fmax):
+    """
+    Args:
+        spec :: (B, Feat, Frame) - Linear-frequency spectrograms
+    """
     global mel_basis
     dtype_device = str(spec.dtype) + '_' + str(spec.device)
     fmax_dtype_device = str(fmax) + '_' + dtype_device

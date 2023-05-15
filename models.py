@@ -593,9 +593,9 @@ class SynthesizerTrn(nn.Module):
   def forward(self, unit: Tensor, spec: Tensor, mel: Tensor):
     """
     Args:
-      unit - Unit series
-      spec - Linear-frequency spectrogram
-      mel  - Mel-frequency    spectrogram
+      unit :: (B, Feat, Frame) - Unit series
+      spec :: (B, Freq, Frame) - Linear-frequency spectrogram
+      mel                      - Mel-frequency    spectrogram
     Returns:
       o
       o_mb

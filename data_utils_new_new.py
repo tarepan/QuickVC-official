@@ -6,12 +6,12 @@ from typing import Literal
 
 import numpy as np
 import torch
-from torch import FloatTensor
+from torch import Tensor, FloatTensor
 import torch.utils.data
 from torch.utils.data.distributed import DistributedSampler
 from scipy.io.wavfile import read
 
-import commons
+from commons import slice_segments
 from mel_processing import spectrogram_torch
 from utils import QuickVCParams
 
@@ -105,57 +105,87 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
         return len(self.audiopaths)
 
 
-class TextAudioSpeakerCollate():
+def rand_spec_segments(series: Tensor, series_lengths: Tensor, segment_size: int) -> tuple[Tensor, Tensor]:
+    """
+    Randomly clip a segment from series's effective region.
+
+    Args:
+        series         :: (B, Feat, Frame) - Clipping-target serieses, right-padded
+        series_lengths :: (B,)             - Effective lengths of serieses
+        segment_size                       - Clipped segment length
+    Returns:
+        segment        :: (B, Feat, Frame=seg) - Clipped segments
+        indice_start   :: (B,)                 - Indice of segment start
+    """
+    # Random segment start indice
+    ndim_b = series.size()[0]
+    indice_start_max = series_lengths - segment_size # +1 (in rand_slice_segments)
+    indice_start = (torch.rand([ndim_b]).to(device=series.device) * indice_start_max).to(dtype=torch.long)
+
+    # Clipping
+    segment = slice_segments(series, indice_start, segment_size)
+
+    return segment, indice_start
+
+
+class UnitSpecWaveCollate():
     """Collate function, Zero-pads model inputs and targets
     """
-    def __init__(self, hps):
+    def __init__(self, hps: QuickVCParams):
         self.hps = hps
 
-    def __call__(self, batch: tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]):
-        """Collate's training batch from normalized text, audio and speaker identities
+    def __call__(self, batch: list[tuple[FloatTensor, FloatTensor, FloatTensor]]):
+        """Collate training batch from unit, spec and wave.
         
         Args:
-            batch - (c, spec, audio_norm)
+            batch
+                c    :: maybe (Feat, Frame)
+                spec :: maybe (Freq, Frame)
+                audio_norm
+        Returns:
+            c_padded    :: (B, Feat, Frame=min|cap) - Unit randomly clipped from effective region, length is (variable) min-in-batch | (fixed) max-cap
+            spec_padded :: (B, Feat, Frame=min|cap) - Spec randomly clipped from effective region, length is (variable) min-in-batch | (fixed) max-cap
+            wav_padded  :: (B, 1,    T    =min|cap) - Wave randomly clipped from effective region, length is (variable) min-in-batch | (fixed) max-cap
         """
         # Right zero-pad all one-hot text sequences to max input length
         _, ids_sorted_decreasing = torch.sort(torch.LongTensor([x[0].size(1) for x in batch]), dim=0, descending=True)
 
-        max_spec_len = max([x[1].size(1) for x in batch])
-        max_wav_len  = max([x[2].size(1) for x in batch])
-        spec_lengths = torch.LongTensor(len(batch))
-        wav_lengths  = torch.LongTensor(len(batch))
 
         # Padding based on longest series
+        ## c_padded :: (B, Feat, Frame) / spec_padded :: (B, Freq, Frame) / wav_padded :: (B, Feat=1, T)
+        max_spec_len = max([x[1].size(1) for x in batch])
+        max_wave_len = max([x[2].size(1) for x in batch])
         c_padded    = torch.FloatTensor(len(batch), batch[0][0].size(0), max_spec_len)
         spec_padded = torch.FloatTensor(len(batch), batch[0][1].size(0), max_spec_len)
-        wav_padded  = torch.FloatTensor(len(batch), 1,                   max_wav_len)
+        wav_padded  = torch.FloatTensor(len(batch), 1,                   max_wave_len)
         c_padded.zero_()
         spec_padded.zero_()
         wav_padded.zero_()
+        ## Effective length of a series :: (B,)
+        spec_lengths = torch.LongTensor(len(batch))
+        for i, idx in enumerate(ids_sorted_decreasing):
+            c, spec, wav = batch[idx]
+            len_c, len_s, len_w = c.size(1), spec.size(1), wav.size(1)
+            # Right padding
+            c_padded[   i, :, : len_c] = c
+            spec_padded[i, :, : len_s] = spec
+            wav_padded[ i, :, : len_w] = wav
+            # Effective lengths
+            spec_lengths[i] = len_s
 
-        for i in range(len(ids_sorted_decreasing)):
-            row = batch[ids_sorted_decreasing[i]]
+        # Segment length - shortest item length | max_speclen
+        spec_seglen = int(spec_lengths[-1].item()) if spec_lengths[-1] < self.hps.train.max_speclen + 1 else self.hps.train.max_speclen + 1
+        wav_seglen  = spec_seglen * self.hps.data.hop_length
 
-            c = row[0]
-            c_padded[i, :, :c.size(1)] = c
+        # Random clipping from effective region
+        spec_padded, ids_slice = rand_spec_segments(spec_padded, spec_lengths, spec_seglen)
+        c_padded   = slice_segments(c_padded,   ids_slice,                            spec_seglen)
+        wav_padded = slice_segments(wav_padded, ids_slice * self.hps.data.hop_length, wav_seglen)
 
-            spec = row[1]
-            spec_padded[i, :, :spec.size(1)] = spec
-            spec_lengths[i] = spec.size(1)
-
-            wav = row[2]
-            wav_padded[i, :, :wav.size(1)] = wav
-            wav_lengths[i] = wav.size(1)
-
-        spec_seglen = spec_lengths[-1] if spec_lengths[-1] < self.hps.train.max_speclen + 1 else self.hps.train.max_speclen + 1
-        wav_seglen = spec_seglen * self.hps.data.hop_length 
-        spec_padded, ids_slice = commons.rand_spec_segments(spec_padded, spec_lengths, spec_seglen)
-        wav_padded = commons.slice_segments(wav_padded, ids_slice * self.hps.data.hop_length, wav_seglen)
-
-        c_padded = commons.slice_segments(c_padded, ids_slice, spec_seglen)[:,:,:-1]
-
+        # Drop right-most frame (?)
         spec_padded = spec_padded[:,:,:-1]
-        wav_padded = wav_padded[:,:,:-self.hps.data.hop_length]
+        c_padded    =    c_padded[:,:,:-1]
+        wav_padded  =  wav_padded[:,:,:-self.hps.data.hop_length]
 
         return c_padded, spec_padded, wav_padded
 
@@ -285,15 +315,13 @@ if __name__ == "__main__":
     import utils
     from torch.utils.data import DataLoader
 
-    hps = utils.get_hparams()
-    train_dataset = UnitAudioSpecLoader("train", hps)
+    _hps = utils.get_hparams()
+    train_dataset = UnitAudioSpecLoader("train", _hps)
     train_sampler = DistributedBucketSampler(
-        train_dataset, hps.train.batch_size,
+        train_dataset, _hps.train.batch_size,
         [32,70,100,200,300,400,500,600,700,800,900,1000], shuffle=True)
-    collate_fn = TextAudioSpeakerCollate(hps)
-    train_loader = DataLoader(train_dataset, num_workers=1, shuffle=False, pin_memory=True,
-        collate_fn=collate_fn, batch_sampler=train_sampler)
+    collate_fn = UnitSpecWaveCollate(_hps)
+    train_loader = DataLoader(train_dataset, num_workers=1, shuffle=False, pin_memory=True, collate_fn=collate_fn, batch_sampler=train_sampler)
 
     for batch_idx, (c, spec, y) in enumerate(train_loader):
         print(c.size(), spec.size(), y.size())
-        #print(batch_idx, c, spec, y)

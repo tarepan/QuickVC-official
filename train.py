@@ -16,7 +16,7 @@ from pqmf import PQMF
 import commons
 import utils
 from utils import QuickVCParams
-from data_utils_new_new import UnitAudioSpecLoader, TextAudioSpeakerCollate, DistributedBucketSampler
+from data_utils_new_new import UnitAudioSpecLoader, UnitSpecWaveCollate, DistributedBucketSampler
 from models import SynthesizerTrn, MultiPeriodDiscriminator
 from losses import generator_loss, discriminator_loss, feature_loss, kl_loss, subband_stft_loss
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
@@ -48,7 +48,7 @@ def run():
     train_sampler = DistributedBucketSampler(
         train_dataset, hps.train.batch_size,
         [32,40,50,60,70,80,90,100,110,120,160,200,230,260,300,350,400,450,500,600,700,800,900,1000], shuffle=True)
-    train_collate = TextAudioSpeakerCollate(hps)
+    train_collate = UnitSpecWaveCollate(hps)
     train_loader = DataLoader(train_dataset, num_workers=2, shuffle=False,               pin_memory=True, collate_fn=train_collate, batch_sampler=train_sampler)
     eval_loader  = DataLoader(eval_dataset,  num_workers=2, shuffle=True,  batch_size=1, pin_memory=False, drop_last=False)
 
@@ -104,7 +104,7 @@ def train_and_evaluate(
     net_d.train()
     for batch_idx, (c, spec, y) in enumerate(train_loader):
         #### Step ################################################################################################
-        # Data - Unit series, Linear spectrogram, Waveform
+        # Data - Unit series :: (B, Feat, Frame), Linear spectrogram :: (B, Freq, Frame), Waveform :: (B, 1, T)
         c, spec, y = c.cuda(non_blocking=True), spec.cuda(non_blocking=True), y.cuda(non_blocking=True)
 
         mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
@@ -201,6 +201,7 @@ def evaluate(global_step: int, hps: QuickVCParams, net_g: SynthesizerTrn, loader
     # Inference
     with torch.no_grad():
         # Data - only the first sample
+        #   Unit series :: (B=1, Feat, Frame), Linear spectrogram :: (B=1, Freq, Frame), Waveform :: (B=1, 1, T)
         for c, spec, y in loader:
             c, spec, y = c[:1].cuda(), spec[:1].cuda(), y[:1].cuda()
             break
