@@ -55,26 +55,3 @@ def rand_slice_segments(series: Tensor, segment_size: int) -> tuple[Tensor, Tens
 
   return segment, indice_start
 #### /Slice #########################################################################################################
-
-
-#### Train ##########################################################################################################
-def count_grad_norm(parameters) -> float:
-  """Count total gradient norm."""
-
-  norm_type = 2.
-
-  # Select Gradient-active parameters
-  if isinstance(parameters, torch.Tensor):
-    parameters = [parameters]
-  parameters = list(filter(lambda p: p.grad is not None, parameters))
-
-  total_norm: float = 0.
-  for param in parameters:
-    # Norm calculation
-    param_norm = param.grad.data.norm(norm_type)
-    # Counting
-    total_norm += param_norm.item() ** norm_type
-
-  total_norm = total_norm ** (1. / norm_type)
-  return total_norm
-#### /Train #########################################################################################################

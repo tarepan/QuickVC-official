@@ -159,19 +159,14 @@ def train_and_evaluate(
 
         # Training logging
         if global_step % hps.train.log_interval == 0:
-            # Gradient norm counting
-            grad_norm_g = commons.count_grad_norm(net_g.parameters())
-            grad_norm_d = commons.count_grad_norm(net_d.parameters())
-
-            lr = optim_g.param_groups[0]['lr']
             losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_kl, loss_subband]
             logger.info('Train Epoch: {} [{:.0f}%]'.format(epoch, 100. * batch_idx / len(train_loader)))
-            logger.info([x.item() for x in losses] + [global_step, lr])
-            scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_d": grad_norm_d, "grad_norm_g": grad_norm_g}
+            logger.info([x.item() for x in losses] + [global_step])
+            scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all,}
             scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel,  "loss/g/kl": loss_kl, "loss/g/subband": loss_subband})
-            scalar_dict.update({"loss/g/{}".format(i):   v for i, v in enumerate(losses_gen)})
-            scalar_dict.update({"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)})
-            scalar_dict.update({"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)})
+            scalar_dict.update({f"loss/g/{i}":   v for i, v in enumerate(losses_gen)})
+            scalar_dict.update({f"loss/d_r/{i}": v for i, v in enumerate(losses_disc_r)})
+            scalar_dict.update({f"loss/d_g/{i}": v for i, v in enumerate(losses_disc_g)})
             image_dict = { 
                 "slice/mel_org": utils.plot_spectrogram_to_numpy(    y_mel[0].data.cpu().numpy()),
                 "slice/mel_gen": utils.plot_spectrogram_to_numpy(y_hat_mel[0].data.cpu().numpy()), 
