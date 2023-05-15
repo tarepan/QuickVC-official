@@ -9,7 +9,7 @@ from torch.nn.utils import weight_norm, remove_weight_norm
 import commons
 from commons import init_weights, get_padding
 import modules
-from modules import ResBlock1
+from modules import WN, ResBlock1
 from pqmf import PQMF
 from stft import TorchSTFT
 
@@ -51,8 +51,8 @@ class ResidualCouplingBlock(nn.Module):
     return x
 
 
-class PosteriorEncoder(nn.Module):
-  """Normal distribution parameterized by SegFC-WaveNet-SegFC.
+class CondNormalWN(nn.Module):
+  """q(X|y,c) = N(X|μ,σ=NN(y,c)), Conditional Normal distribution parameterized by SegFC-WaveNet-SegFC.
   """
 
   def __init__(self,
@@ -65,37 +65,34 @@ class PosteriorEncoder(nn.Module):
     ):
     super().__init__()
 
-    self.out_channels = out_channels
+    self._out_channels = out_channels
 
-    # PreNet  :: (B, Feat=i, Frame) -> (B, Feat=h,  Frame) - SegFC
-    # MainNet :: (B, Feat=h, Frame) -> (B, Feat=h,  Frame) - WaveNet
-    # PostNet :: (B, Feat=h, Frame) -> (B, Feat=2o, Frame) - SegFC
+    # PreNet (SegFC) / MainNet (WaveNet) / PostNet (SegFC)
     self.pre  = Conv1d(in_channels,     hidden_channels,  1)
-    self.enc  = modules.WN(hidden_channels, kernel_size, n_layers, gin_channels)
+    self.enc  = WN(hidden_channels, kernel_size, n_layers, gin_channels)
     self.proj = Conv1d(hidden_channels, 2 * out_channels, 1)
 
-  def forward(self, x: Tensor, g: Tensor | None = None):
-    """
+  def forward(self, series: Tensor, cond: Tensor | None = None) -> tuple[Tensor, Tensor, Tensor]:
+    """Conditional random sampling.
+
     Args:
-      x         :: (B, Feat=i, Frame) - Input series
-      x_lengths :: (B,)               - Effective lengths of each input series
-      g                               - Conditioning input
+        series        :: (B, Feat=i, Frame) - Input series
+        cond                                - Conditioning input series
     Returns:
-      z         :: (B, Feat=o, Frame) - Sampled series
-      m
-      logs
-
+        sample_series :: (B, Feat=o, Frame) - Sampled series
+        mu            :: (B, Feat=o, Frame) - Conditioned normal distribution parameter μ
+        logs          :: (B, Feat=o, Frame) - Conditioned normal distribution parameter σ, log-scale
     """
 
-    # :: (B, Feat=i, Frame) -> (B, Feat=2o, Frame)
-    x = self.pre(x)
-    x = self.enc(x, g=g)
-    stats = self.proj(x)
+    # Parameterization :: (B, Feat=i, Frame) -> (B, Feat=2o, Frame) - params = NN(y,c)
+    series = self.pre(series)
+    series = self.enc(series, g=cond)
+    params = self.proj(series)
 
-    # Normal distribution :: (B, Feat=2o, Frame) -> (B, Feat=o, Frame) - z ~ N(z|m,s)
-    m, logs = torch.split(stats, self.out_channels, dim=1)
-    z = m + torch.randn_like(m) * torch.exp(logs)
-    return z, m, logs
+    # Normal distribution :: (B, Feat=2o, Frame) -> 2x (B, Feat=o, Frame) -> (B, Feat=o, Frame) - z ~ N(z|m,s)
+    mu, logs = torch.split(params, [self._out_channels]*2, dim=1)
+    sample_series = mu + torch.randn_like(mu) * torch.exp(logs)
+    return sample_series, mu, logs
 
 
 class iSTFT_Generator(torch.nn.Module):
@@ -582,8 +579,8 @@ class SynthesizerTrn(nn.Module):
     unit_channels: int = 256 # 768 # Feature dimension size of unit series
 
     # PosteriorEncoder / PriorEncoder (ContentEncoder/Flow) / SpeakerEncoder
-    self.enc_q =      PosteriorEncoder(spec_channels,  inter_channels, hidden_channels, 5, 16,    gin_channels)
-    self.enc_p =      PosteriorEncoder(unit_channels,  inter_channels, hidden_channels, 5, 16,    0)
+    self.enc_q =          CondNormalWN(spec_channels,  inter_channels, hidden_channels, 5, 16,    gin_channels)
+    self.enc_p =          CondNormalWN(unit_channels,  inter_channels, hidden_channels, 5, 16,    0)
     self.flow  = ResidualCouplingBlock(inter_channels, inter_channels, hidden_channels, 5,  4, 4, gin_channels)
     self.enc_spk = SpeakerEncoder(model_hidden_size=gin_channels, model_embedding_size=gin_channels)
 
