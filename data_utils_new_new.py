@@ -252,7 +252,7 @@ class DistributedBucketSampler(DistributedSampler):
                 pass
 
         # Filter null buckets and corresponding boundaries
-        for i in range(len(buckets) - 1, 0, -1):
+        for i in range(len(buckets) - 1, -1, -1):
             if len(buckets[i]) == 0:
                 buckets.pop(i)
                 self.boundaries.pop(i+1)
