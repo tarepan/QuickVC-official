@@ -39,7 +39,10 @@ def load_filepaths(train_eval: str, dataset_identity: str, hpm: QuickVCParams) -
         # Extended by speechcorpusy
         corpus = load_preset(dataset_identity, hpm.data.adress_data_root, download=False)
         ids_full = corpus.get_identities()
-        ids = ids_full[:-10] if train_eval == "train" else ids_full[-10:]
+        # Last utterance from a speaker
+        spks = set(map(lambda id: id.speaker, ids_full))
+        ids_spks = [list(filter(lambda id: id.speaker == spk, ids_full)) for spk in spks]
+        ids = sum([ids_spk[:-1] for ids_spk in ids_spks], []) if train_eval == "train" else sum([ids_spk[-1:] for ids_spk in ids_spks], [])
         filepaths: list[list[str]] = [[str(corpus.get_item_path(id).with_suffix(".16k.wav"))] for id in ids]
         return filepaths
 
