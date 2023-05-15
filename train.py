@@ -76,7 +76,7 @@ def run():
 
     # Train & Eval
     for epoch in range(epoch_str, hps.train.epochs + 1):
-        train_and_evaluate(global_step, epoch, hps, (net_g, net_d), (optim_g, optim_d), scaler, (train_loader, eval_loader), logger, (writer, writer_eval))
+        global_step = train_and_evaluate(global_step, epoch, hps, (net_g, net_d), (optim_g, optim_d), scaler, (train_loader, eval_loader), logger, (writer, writer_eval))
         scheduler_g.step()
         scheduler_d.step()
 
@@ -91,7 +91,7 @@ def train_and_evaluate(
     loaders:     tuple[DataLoader, DataLoader],
     logger:      Logger,
     writers:     tuple[SummaryWriter, SummaryWriter]
-):
+) -> int:
     """Train and Evaluate QuickVC."""
 
     #### Epoch #####################################################################################################
@@ -182,6 +182,7 @@ def train_and_evaluate(
     logger.info(f'====> Epoch: {epoch}')
     #### /Epoch ####################################################################################################
 
+    return global_step
 
 def evaluate(global_step: int, hps: QuickVCParams, net_g: SynthesizerTrn, loader: DataLoader, writer: SummaryWriter):
     """Evaluate reconstruction, then log."""
