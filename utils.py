@@ -15,6 +15,7 @@ logging.basicConfig(stream=sys.stdout, level=logging.WARNING)
 logger = logging
 
 
+#### HParams #########################################################################
 @dataclass
 class TrainParams:
   log_interval:  int
@@ -72,6 +73,75 @@ class QuickVCParams:
     train: TrainParams
     data:  DataParams
     model: ModelParams
+
+
+def get_hparams() -> QuickVCParams:
+  parser = argparse.ArgumentParser()
+  parser.add_argument('-c',  '--config',     type=str, default="./configs/quickvc.json", help='JSON file for configuration')
+  parser.add_argument('-m',  '--model',      type=str, default="quickvc",                help='Model name')
+  parser.add_argument('-mr', '--modelroot',  type=str, default="./logs",                 help='Path of model root directory')
+  
+  args = parser.parse_args()
+  model_dir: str = os.path.join(args.modelroot, args.model)
+
+  # Load
+  config_path = args.config
+  with open(config_path, "r") as f:
+    data = f.read()
+  config = json.loads(data)
+  hparams = HParams(**config)
+  hparams.model_dir = model_dir
+
+  # Save
+  if not os.path.exists(model_dir):
+    os.makedirs(model_dir)
+  config_save_path = os.path.join(model_dir, "config.json")
+  with open(config_save_path, "w") as f:
+    f.write(data)
+
+  return hparams
+
+
+def get_hparams_from_file(config_path: str) -> QuickVCParams:
+  with open(config_path, "r") as f:
+    data = f.read()
+  config = json.loads(data)
+
+  hparams =HParams(**config)
+  return hparams
+
+
+class HParams():
+  def __init__(self, **kwargs):
+    for k, v in kwargs.items():
+      if type(v) == dict:
+        v = HParams(**v)
+      self[k] = v
+    
+  def keys(self):
+    return self.__dict__.keys()
+
+  def items(self):
+    return self.__dict__.items()
+
+  def values(self):
+    return self.__dict__.values()
+
+  def __len__(self):
+    return len(self.__dict__)
+
+  def __getitem__(self, key):
+    return getattr(self, key)
+
+  def __setitem__(self, key, value):
+    return setattr(self, key, value)
+
+  def __contains__(self, key):
+    return key in self.__dict__
+
+  def __repr__(self):
+    return self.__dict__.__repr__()
+#### /HParams ########################################################################
 
 
 #### Check pointing ##################################################################
@@ -133,6 +203,22 @@ def latest_checkpoint_path(dir_path: str, regex: str = "G_*.pth"):
 #### /Check pointing #################################################################
 
 
+#### Logging #########################################################################
+def get_logger(model_dir: str, filename: str = "train.log"):
+  global logger
+  logger = logging.getLogger(os.path.basename(model_dir))
+  logger.setLevel(logging.DEBUG)
+  
+  formatter = logging.Formatter("%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s")
+  if not os.path.exists(model_dir):
+    os.makedirs(model_dir)
+  h = logging.FileHandler(os.path.join(model_dir, filename))
+  h.setLevel(logging.DEBUG)
+  h.setFormatter(formatter)
+  logger.addHandler(h)
+  return logger
+
+
 def summarize(writer, global_step, scalars={}, histograms={}, images={}, audios={}, audio_sampling_rate=22050):
   for k, v in scalars.items():
     writer.add_scalar(k, v, global_step)
@@ -168,86 +254,4 @@ def plot_spectrogram_to_numpy(spectrogram):
   data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
   plt.close()
   return data
-
-
-def get_hparams() -> QuickVCParams:
-  parser = argparse.ArgumentParser()
-  parser.add_argument('-c',  '--config',     type=str, default="./configs/quickvc.json", help='JSON file for configuration')
-  parser.add_argument('-m',  '--model',      type=str, default="quickvc",                help='Model name')
-  parser.add_argument('-mr', '--modelroot',  type=str, default="./logs",                 help='Path of model root directory')
-  
-  args = parser.parse_args()
-  model_dir: str = os.path.join(args.modelroot, args.model)
-
-  # Load
-  config_path = args.config
-  with open(config_path, "r") as f:
-    data = f.read()
-  config = json.loads(data)
-  hparams = HParams(**config)
-  hparams.model_dir = model_dir
-
-  # Save
-  if not os.path.exists(model_dir):
-    os.makedirs(model_dir)
-  config_save_path = os.path.join(model_dir, "config.json")
-  with open(config_save_path, "w") as f:
-    f.write(data)
-
-  return hparams
-
-
-def get_hparams_from_file(config_path: str) -> QuickVCParams:
-  with open(config_path, "r") as f:
-    data = f.read()
-  config = json.loads(data)
-
-  hparams =HParams(**config)
-  return hparams
-
-
-def get_logger(model_dir: str, filename: str = "train.log"):
-  global logger
-  logger = logging.getLogger(os.path.basename(model_dir))
-  logger.setLevel(logging.DEBUG)
-  
-  formatter = logging.Formatter("%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s")
-  if not os.path.exists(model_dir):
-    os.makedirs(model_dir)
-  h = logging.FileHandler(os.path.join(model_dir, filename))
-  h.setLevel(logging.DEBUG)
-  h.setFormatter(formatter)
-  logger.addHandler(h)
-  return logger
-
-
-class HParams():
-  def __init__(self, **kwargs):
-    for k, v in kwargs.items():
-      if type(v) == dict:
-        v = HParams(**v)
-      self[k] = v
-    
-  def keys(self):
-    return self.__dict__.keys()
-
-  def items(self):
-    return self.__dict__.items()
-
-  def values(self):
-    return self.__dict__.values()
-
-  def __len__(self):
-    return len(self.__dict__)
-
-  def __getitem__(self, key):
-    return getattr(self, key)
-
-  def __setitem__(self, key, value):
-    return setattr(self, key, value)
-
-  def __contains__(self, key):
-    return key in self.__dict__
-
-  def __repr__(self):
-    return self.__dict__.__repr__()
+#### /Logging ########################################################################
