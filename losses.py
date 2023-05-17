@@ -2,6 +2,7 @@
 
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 
 from stft_loss import MultiResolutionSTFTLoss
 
@@ -11,20 +12,24 @@ def feature_loss(fmap_r: list[list[Tensor]], fmap_g: list[list[Tensor]]) -> Tens
   for dr, dg in zip(fmap_r, fmap_g):
     for rl, gl in zip(dr, dg):
       rl = rl.detach()
-      loss += torch.mean(torch.abs(rl - gl))
+      loss += F.l1_loss(rl, gl)
 
   return loss * 2
 
 
 def discriminator_loss(disc_real_outputs: list[Tensor], disc_generated_outputs: list[Tensor]) -> tuple[Tensor, list[float], list[float]]:
+  # For forward
   loss = 0
+  # For logging
   r_losses: list[float] = []
   g_losses: list[float] = []
 
   for dr, dg in zip(disc_real_outputs, disc_generated_outputs):
-    r_loss = torch.mean((1 - dr)**2)
-    g_loss = torch.mean(dg**2)
+    # Forward
+    r_loss = F.mse_loss(torch.ones_like( dr), dr)
+    g_loss = F.mse_loss(torch.zeros_like(dg), dg)
     loss += (r_loss + g_loss)
+    # For logging
     r_losses.append(r_loss.item())
     g_losses.append(g_loss.item())
 
@@ -33,11 +38,14 @@ def discriminator_loss(disc_real_outputs: list[Tensor], disc_generated_outputs: 
 
 def generator_loss(disc_outputs: list[Tensor]) -> tuple[Tensor, list[Tensor]]:
   loss = 0
+  # For logging
   gen_losses: list[Tensor] = []
   for dg in disc_outputs:
-    l = torch.mean((1 - dg)**2)
-    gen_losses.append(l)
+    # Forward
+    l = F.mse_loss(torch.ones_like(dg), dg)
     loss += l
+    # For logging
+    gen_losses.append(l)
 
   return loss, gen_losses
 
