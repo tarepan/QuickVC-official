@@ -19,7 +19,7 @@ from utils import QuickVCParams
 from data_utils_new_new import UnitAudioSpecLoader, UnitSpecWaveCollate, DistributedBucketSampler
 from models import SynthesizerTrn, MultiPeriodDiscriminator
 from losses import generator_loss, discriminator_loss, feature_loss, kl_loss, subband_stft_loss
-from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
+from mel_processing import wave_to_mel, spec_to_mel
 
 
 def run():
@@ -113,7 +113,7 @@ def train_and_evaluate(
         # Common_Forward
         with autocast(enabled=hps.train.fp16_run):
             # TODO: preprocessing. Loader becomes heavy, but in both case, same size of mel is loaded on GPU memory.)
-            mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
+            mel = spec_to_mel(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
             y_hat, y_hat_mb, ids_slice, (_, z_p, m_p, logs_p, _, logs_q) = net_g(c, spec, mel)
             y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size)
         # D_Forward/Loss
@@ -130,7 +130,7 @@ def train_and_evaluate(
         # G_Loss
         with autocast(enabled=hps.train.fp16_run):
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
-            y_hat_mel = mel_spectrogram_torch(y_hat.squeeze(1), 
+            y_hat_mel = wave_to_mel(y_hat.squeeze(1), 
                 hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
             y_mel = commons.slice_segments(mel, ids_slice, hps.train.segment_size // hps.data.hop_length)
             loss_mel = hps.train.c_mel * F.l1_loss(y_mel, y_hat_mel)
@@ -196,9 +196,9 @@ def evaluate(global_step: int, hps: QuickVCParams, net_g: SynthesizerTrn, loader
         for i, (c, spec, y) in enumerate(loader):
             c, spec, y = c.cuda(), spec.cuda(), y.cuda()
             # Forward
-            mel = spec_to_mel_torch(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
+            mel = spec_to_mel(spec, hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.mel_fmin, hps.data.mel_fmax)
             y_hat = net_g.infer(c, mel)
-            y_hat_mel = mel_spectrogram_torch(
+            y_hat_mel = wave_to_mel(
             y_hat.squeeze(1).float(),
             hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
 

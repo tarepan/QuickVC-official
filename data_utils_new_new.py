@@ -13,7 +13,7 @@ import librosa
 from speechcorpusy import load_preset
 
 from commons import slice_segments
-from mel_processing import spectrogram_torch
+from mel_processing import wave_to_spec
 from utils import QuickVCParams
 
 
@@ -114,7 +114,7 @@ class UnitAudioSpecLoader(torch.utils.data.Dataset):
         if os.path.exists(spec_filename):
             spec = torch.load(spec_filename)
         else:
-            spec = spectrogram_torch(audio, self.filter_length, self.hop_length, self.win_length, center=False).squeeze(0)
+            spec = wave_to_spec(audio, self.filter_length, self.hop_length, self.win_length, center=False).squeeze(0)
             torch.save(spec, spec_filename)
 
         # c :: () - Unit series

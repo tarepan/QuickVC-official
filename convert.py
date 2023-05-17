@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 import utils
 from models import SynthesizerTrn
-from mel_processing import mel_spectrogram_torch
+from mel_processing import wave_to_mel
 
 
 if __name__ == "__main__":
@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
             # Infer
             ## TgtWave-to-Mel for speaker embedding
-            mel_tgt = mel_spectrogram_torch(
+            mel_tgt = wave_to_mel(
                 wav_tgt,
                 hps.data.filter_length, hps.data.n_mel_channels, hps.data.sampling_rate, hps.data.hop_length, hps.data.win_length, hps.data.mel_fmin, hps.data.mel_fmax)
             ## SrcWave-to-Unit for content encoding
