@@ -5,13 +5,13 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn import Conv1d, ConvTranspose1d, Conv2d
 from torch.nn.utils import weight_norm, remove_weight_norm
+from torchaudio.transforms import  InverseSpectrogram
 
 import commons
 from commons import init_weights, get_padding
 import modules
 from modules import WN, ResBlock1
 from pqmf import PQMF
-from stft import TorchSTFT
 
 
 class ResidualCouplingBlock(nn.Module):
@@ -140,7 +140,7 @@ class iSTFT_Generator(torch.nn.Module):
         self.conv_post.apply(init_weights)
 
         # iSTFT
-        self.stft = TorchSTFT(n_fft, hop_istft, n_fft)
+        self.stft = InverseSpectrogram(n_fft, n_fft, hop_istft)
 
     def forward(self, x: Tensor, g: Tensor):
         """Forward
@@ -178,7 +178,7 @@ class iSTFT_Generator(torch.nn.Module):
         ## Run :: 2x (B, Freq, Frame) -> (B, 1, T)
         spec  =           torch.exp(spec)
         phase = math.pi * torch.sin(phase)
-        out = self.stft.inverse(spec, phase)
+        out = self.stft(spec * torch.exp(phase * 1j)).unsqueeze(-2)
 
         return out, None
 
@@ -238,7 +238,7 @@ class Multiband_iSTFT_Generator(torch.nn.Module):
         self.subband_conv_post.apply(init_weights)
 
         # iSTFT
-        self.stft = TorchSTFT(n_fft, hop_istft, n_fft)
+        self.stft = InverseSpectrogram(n_fft, n_fft, hop_istft)
 
         # Band synthesis
         self.pqmf = PQMF()
@@ -284,7 +284,7 @@ class Multiband_iSTFT_Generator(torch.nn.Module):
         ## Run :: (B, Freq, Frm) -> (B, 1, T')
         spec  =           torch.exp(spec)
         phase = math.pi * torch.sin(phase)
-        y_mb_hat = self.stft.inverse(spec, phase)
+        y_mb_hat = self.stft(spec * torch.exp(phase * 1j)).unsqueeze(-2)
         ## Band un-batching :: (B, 1, T') -> (B, Band, 1, T') -> (B, Band, T')
         y_mb_hat = torch.reshape(y_mb_hat, (x.shape[0], self.subbands, 1, y_mb_hat.shape[-1])).squeeze(-2)
 
@@ -347,7 +347,7 @@ class Multistream_iSTFT_Generator(torch.nn.Module):
         self.subband_conv_post.apply(init_weights)
 
         # iSTFT
-        self.stft = TorchSTFT(n_fft, hop_istft, n_fft)
+        self.stft = InverseSpectrogram(n_fft, n_fft, hop_istft)
 
         # Band synthesis
         updown_filter = torch.zeros((self.subbands, self.subbands, self.subbands)).float()
@@ -398,7 +398,7 @@ class Multistream_iSTFT_Generator(torch.nn.Module):
         ## Run :: (B, Freq, Frm) -> (B, 1, T')
         spec  =           torch.exp(spec)
         phase = math.pi * torch.sin(phase)
-        y_mb_hat = self.stft.inverse(spec, phase)
+        y_mb_hat = self.stft(spec * torch.exp(phase * 1j)).unsqueeze(-2)
 
         # Band synthesis :: (B=b*band, 1, T') -> (B=b, Band=band, T') -> (B, 1, T)? - Learnable-filter synthesis
         y_mb_hat = torch.reshape(y_mb_hat, (x.shape[0], self.subbands, 1, y_mb_hat.shape[-1])).squeeze(-2)
@@ -548,7 +548,7 @@ class SpeakerEncoder(torch.nn.Module):
 
 class SynthesizerTrn(nn.Module):
   """QuickVC Generator for training (w/ posterior encoder, w/o wave-to-unit encoder)"""
-  def __init__(self, 
+  def __init__(self,
     spec_channels:   int,        # Feature dimension size of linear spectrogram
     segment_size:    int,        # Decoder training segment size [frame]
     inter_channels:  int,        # Feature dimension size of latent z (both Zsi and Zsd)
