@@ -8,25 +8,7 @@
 import torch
 from torch import Tensor
 import torch.nn.functional as F
-
-
-def stft(x, fft_size, hop_size, win_length, window):
-    """Perform STFT and convert to magnitude spectrogram.
-    Args:
-        x (Tensor): Input signal tensor (B, T).
-        fft_size (int): FFT size.
-        hop_size (int): Hop size.
-        win_length (int): Window length.
-        window (str): Window function type.
-    Returns:
-        Tensor: Magnitude spectrogram (B, #frames, fft_size // 2 + 1).
-    """
-    x_stft = torch.stft(x, fft_size, hop_size, win_length, window.to(x.device), return_complex=False)
-    real = x_stft[..., 0]
-    imag = x_stft[..., 1]
-
-    # NOTE(kan-bayashi): clamp is needed to avoid nan or inf
-    return torch.sqrt(torch.clamp(real ** 2 + imag ** 2, min=1e-7)).transpose(2, 1)
+from torchaudio.transforms import Spectrogram
 
 
 def spectral_convergenge_loss(x_mag: Tensor, y_mag: Tensor) -> Tensor:
@@ -56,11 +38,9 @@ def log_stft_magnitude_loss(x_mag: Tensor, y_mag: Tensor) -> Tensor:
 class STFTLoss(torch.nn.Module):
     """STFT loss module."""
 
-    def __init__(self, fft_size: int = 1024, shift_size: int = 120, win_length: int = 600, window: str = "hann_window"):
-        """Initialize STFT loss module."""
+    def __init__(self, fft_size: int, shift_size: int, win_length: int):
         super().__init__()
-        self.fft_size, self.shift_size, self.win_length = fft_size, shift_size, win_length
-        self.window = getattr(torch, window)(win_length)
+        self.stft = Spectrogram(fft_size, win_length, shift_size, power=1.0)
 
     def forward(self, x: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
         """Calculate forward propagation.
@@ -71,8 +51,8 @@ class STFTLoss(torch.nn.Module):
             Tensor: Spectral convergence loss value.
             Tensor: Log STFT magnitude loss value.
         """
-        x_mag = stft(x, self.fft_size, self.shift_size, self.win_length, self.window)
-        y_mag = stft(y, self.fft_size, self.shift_size, self.win_length, self.window)
+        x_mag = self.stft(x).transpose(2, 1)
+        y_mag = self.stft(y).transpose(2, 1)
         sc_loss  = spectral_convergenge_loss(x_mag, y_mag)
         mag_loss =   log_stft_magnitude_loss(x_mag, y_mag)
 
@@ -83,24 +63,16 @@ class MultiResolutionSTFTLoss(torch.nn.Module):
     """Multi resolution STFT loss module."""
 
     def __init__(self,
-        fft_sizes:   list[int] = [1024, 2048, 512],
-        hop_sizes:   list[int] = [ 120,  240,  50],
-        win_lengths: list[int] = [ 600, 1200, 240],
-        window:      str       = "hann_window"
+        fft_sizes:   list[int], # List of FFT sizes.      e.g. [1024, 2048, 512]
+        hop_sizes:   list[int], # List of hop sizes.      e.g. [ 120,  240,  50]
+        win_lengths: list[int], # List of window lengths. e.g. [ 600, 1200, 240]
     ):
-        """Initialize Multi resolution STFT loss module.
-        Args:
-            fft_sizes   - List of FFT sizes.
-            hop_sizes   - List of hop sizes.
-            win_lengths - List of window lengths.
-            window      - Window function type name
-        """
         super().__init__()
 
         assert len(fft_sizes) == len(hop_sizes) == len(win_lengths)
         self.stft_losses = torch.nn.ModuleList()
         for fs, ss, wl in zip(fft_sizes, hop_sizes, win_lengths):
-            self.stft_losses += [STFTLoss(fs, ss, wl, window)]
+            self.stft_losses += [STFTLoss(fs, ss, wl)]
 
     def forward(self, x: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
         """Calculate forward propagation.
