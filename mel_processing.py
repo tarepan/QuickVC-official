@@ -12,69 +12,92 @@ mel_basis = {}
 hann_window = {}
 
 
-def spectrogram_torch(y, n_fft, hop_size, win_size, center=False):
+def spectrogram_torch(
+        y: Tensor,            # :: (B, T)           - Audio waveforms
+        n_fft: int,
+        hop_size: int,
+        win_size: int,
+        center: bool = False,
+    ) -> Tensor:              # :: (B, Freq, Frame) - Linear-frequency Linear-amplitude spectrogram
+    """Convert waveform into Linear-frequency Linear-amplitude spectrogram."""
+
+    # Validation
     if torch.min(y) < -1.:
         print('min value is ', torch.min(y))
     if torch.max(y) > 1.:
         print('max value is ', torch.max(y))
 
+    # Window - Cache if needed
     global hann_window
     dtype_device = str(y.dtype) + '_' + str(y.device)
     wnsize_dtype_device = str(win_size) + '_' + dtype_device
     if wnsize_dtype_device not in hann_window:
         hann_window[wnsize_dtype_device] = torch.hann_window(win_size).to(dtype=y.dtype, device=y.device)
 
+    """
+                          hop=6
+    pad=3                 ''''''
+    ...-----------------------------
+    |__________|     |__________|
+       ^^^^^^           nfft=12
+       1frame
+        -> centered
+    """
     y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
     y = y.squeeze(1)
 
+    # Complex Spectrogram :: (B, T) -> (B, Freq, Frame, RealComplex=2)
     spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[wnsize_dtype_device],
                       center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=False)
 
+    # Linear-frequency Linear-amplitude spectrogram :: (B, Freq, Frame, RealComplex=2) -> (B, Freq, Frame)
     spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
+
     return spec
 
 
-def spec_to_mel_torch(spec, n_fft, num_mels, sampling_rate, fmin, fmax):
+def spec_to_mel_torch(spec: Tensor, n_fft: int, num_mels: int, sampling_rate: int, fmin, fmax) -> Tensor:
     """
     Args:
         spec :: (B, Feat, Frame) - Linear-frequency spectrograms
     """
+    # MelBasis - Cache if needed
     global mel_basis
     dtype_device = str(spec.dtype) + '_' + str(spec.device)
     fmax_dtype_device = str(fmax) + '_' + dtype_device
     if fmax_dtype_device not in mel_basis:
         mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
         mel_basis[fmax_dtype_device] = torch.from_numpy(mel).to(dtype=spec.dtype, device=spec.device)
-    spec = torch.matmul(mel_basis[fmax_dtype_device], spec)
-    spec = spectral_normalize_torch(spec)
-    return spec
+
+   # Mel-frequency Log-amplitude spectrogram :: (B, Freq=num_mels, Frame)
+    melspec = torch.matmul(mel_basis[fmax_dtype_device], spec)
+    melspec = spectral_normalize_torch(melspec)
+
+    return melspec
 
 
-def mel_spectrogram_torch(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
-    if torch.min(y) < -1.:
-        print('min value is ', torch.min(y))
-    if torch.max(y) > 1.:
-        print('max value is ', torch.max(y))
+def mel_spectrogram_torch(
+        y:             Tensor,
+        n_fft:         int,
+        num_mels:      int,
+        sampling_rate: int,
+        hop_size:      int,
+        win_size:      int,
+        fmin              ,
+        fmax              ,
+        center:        bool = False,
+    ) -> Tensor:
+    """Convert waveform into Mel-frequency Log-amplitude spectrogram.
 
-    global mel_basis, hann_window
-    dtype_device = str(y.dtype) + '_' + str(y.device)
-    fmax_dtype_device = str(fmax) + '_' + dtype_device
-    wnsize_dtype_device = str(win_size) + '_' + dtype_device
-    if fmax_dtype_device not in mel_basis:
-        mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
-        mel_basis[fmax_dtype_device] = torch.from_numpy(mel).to(dtype=y.dtype, device=y.device)
-    if wnsize_dtype_device not in hann_window:
-        hann_window[wnsize_dtype_device] = torch.hann_window(win_size).to(dtype=y.dtype, device=y.device)
+    Args:
+        y       :: (B, T)           - Waveforms
+    Returns:
+        melspec :: (B, Freq, Frame) - Mel-frequency Log-amplitude spectrogram
+    """
+    # Linear-frequency Linear-amplitude spectrogram :: (B, T) -> (B, Freq, Frame)
+    spec = spectrogram_torch(y, n_fft, hop_size, win_size, center)
 
-    y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
-    y = y.squeeze(1)
+    # Mel-frequency Log-amplitude spectrogram :: (B, Freq, Frame) -> (B, Freq=num_mels, Frame)
+    melspec = spec_to_mel_torch(spec, n_fft, num_mels, sampling_rate, fmin, fmax)
 
-    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[wnsize_dtype_device],
-                      center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=False)
-
-    spec = torch.sqrt(spec.pow(2).sum(-1) + 1e-6)
-
-    spec = torch.matmul(mel_basis[fmax_dtype_device], spec)
-    spec = spectral_normalize_torch(spec)
-
-    return spec
+    return melspec
