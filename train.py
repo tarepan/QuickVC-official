@@ -105,6 +105,15 @@ def train_and_evaluate(
 
     net_g.train()
     net_d.train()
+
+    # !pip install torch_tb_profiler
+    # with torch.profiler.profile(
+    #         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA,],
+    #         schedule=torch.profiler.schedule(wait=20, warmup=15, active=3, repeat=5),
+    #         on_trace_ready=torch.profiler.tensorboard_trace_handler('/content/gdrive/MyDrive/ML_results/quickvc_official/jvs/amp_b64_05'),
+    #         profile_memory=True,
+    # ) as prof:
+
     for batch_idx, (c, spec, y) in enumerate(train_loader):
         #### Step ################################################################################################
         # Data - Unit series :: (B, Feat, Frame), Linear spectrogram :: (B, Freq, Frame), Waveform :: (B, 1, T)
