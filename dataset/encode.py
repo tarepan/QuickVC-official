@@ -38,14 +38,14 @@ if __name__ == "__main__":
         choices=["soft", "soft"],
     )
     parser.add_argument(
-        "in_dir",
+        "--in_dir",
         metavar="in-dir",
         help="path to the dataset directory.",
         type=Path,
         default="vctk-16k",
     )
     parser.add_argument(
-        "out_dir",
+        "--out_dir",
         metavar="out-dir",
         help="path to the output directory.",
         type=Path,
