@@ -142,20 +142,20 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
   net_g.train()
   net_d.train()
   for batch_idx, (c, spec, y) in enumerate(train_loader):
-    g = None
-    spec, y = spec.cuda(rank, non_blocking=True), y.cuda(rank, non_blocking=True)
-    
-    c = c.cuda(rank, non_blocking=True)
-    mel = spec_to_mel_torch(
-          spec, 
-          hps.data.filter_length, 
-          hps.data.n_mel_channels, 
-          hps.data.sampling_rate,
-          hps.data.mel_fmin, 
-          hps.data.mel_fmax)
-
-
     with autocast(enabled=hps.train.fp16_run):
+      g = None
+      spec, y = spec.cuda(rank, non_blocking=True), y.cuda(rank, non_blocking=True)
+      
+      c = c.cuda(rank, non_blocking=True)
+      mel = spec_to_mel_torch(
+            spec, 
+            hps.data.filter_length, 
+            hps.data.n_mel_channels, 
+            hps.data.sampling_rate,
+            hps.data.mel_fmin, 
+            hps.data.mel_fmax)
+
+
       #print(c.size())
       y_hat, y_hat_mb, ids_slice, z_mask,\
       (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(c, spec, g=g, mel=mel)
@@ -184,9 +184,9 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
       y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size) # slice 
 
       y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
-      with autocast(enabled=False):
-        loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
-        loss_disc_all = loss_disc
+
+      loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
+      loss_disc_all = loss_disc
     optim_d.zero_grad()
     scaler.scale(loss_disc_all).backward()
     scaler.unscale_(optim_d)
@@ -199,22 +199,22 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
     with autocast(enabled=hps.train.fp16_run):
       # Generator
       y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
-      with autocast(enabled=False):
-        #loss_dur = torch.sum(l_length.float())
-        loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
-        loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * hps.train.c_kl
 
-        loss_fm = feature_loss(fmap_r, fmap_g)
-        loss_gen, losses_gen = generator_loss(y_d_hat_g)
+      #loss_dur = torch.sum(l_length.float())
+      loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
+      loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * hps.train.c_kl
+
+      loss_fm = feature_loss(fmap_r, fmap_g)
+      loss_gen, losses_gen = generator_loss(y_d_hat_g)
         
-        if hps.model.mb_istft_vits == True:
-          pqmf = PQMF(y.device)
-          y_mb = pqmf.analysis(y)
-          loss_subband = subband_stft_loss(hps, y_mb, y_hat_mb)
-        else:
-          loss_subband = torch.tensor(0.0)
+      if hps.model.mb_istft_vits == True:
+        pqmf = PQMF(y.device)
+        y_mb = pqmf.analysis(y)
+        loss_subband = subband_stft_loss(hps, y_mb, y_hat_mb)
+      else:
+        loss_subband = torch.tensor(0.0)
 
-        loss_gen_all = loss_gen + loss_fm + loss_mel + loss_kl + loss_subband#+ loss_dur 
+      loss_gen_all = loss_gen + loss_fm + loss_mel + loss_kl + loss_subband#+ loss_dur 
 
     optim_g.zero_grad()
     scaler.scale(loss_gen_all).backward()
