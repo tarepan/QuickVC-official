@@ -1,4 +1,5 @@
 import torch 
+from torch import Tensor, zeros_like, ones_like # pylint: disable=no-name-in-module
 from torch.nn import functional as F
 from stft_loss import MultiResolutionSTFTLoss
 
@@ -6,61 +7,68 @@ from stft_loss import MultiResolutionSTFTLoss
 import commons
 
 
-def feature_loss(fmap_r, fmap_g):
-  loss = 0
-  for dr, dg in zip(fmap_r, fmap_g):
-    for rl, gl in zip(dr, dg):
-      rl = rl.float().detach()
-      gl = gl.float()
-      loss += torch.mean(torch.abs(rl - gl))
+def feature_loss(fmap_r: list[list[Tensor]], fmap_g: list[list[Tensor]]) -> Tensor:
+    """Feature matching losses."""
+    loss = 0
+    for dr, dg in zip(fmap_r, fmap_g):
+        for rl, gl in zip(dr, dg):
+            rl = rl.detach()
+            loss += F.l1_loss(rl, gl)
 
-  return loss * 2 
-
-
-def discriminator_loss(disc_real_outputs, disc_generated_outputs):
-  loss = 0
-  r_losses = []
-  g_losses = []
-  for dr, dg in zip(disc_real_outputs, disc_generated_outputs):
-    dr = dr.float()
-    dg = dg.float()
-    r_loss = torch.mean((1-dr)**2)
-    g_loss = torch.mean(dg**2)
-    loss += (r_loss + g_loss)
-    r_losses.append(r_loss.item())
-    g_losses.append(g_loss.item())
-
-  return loss, r_losses, g_losses
+    return loss * 2
 
 
-def generator_loss(disc_outputs):
-  loss = 0
-  gen_losses = []
-  for dg in disc_outputs:
-    dg = dg.float()
-    l = torch.mean((1-dg)**2)
-    gen_losses.append(l)
-    loss += l
+def discriminator_loss(disc_real_outputs: list[Tensor], disc_generated_outputs: list[Tensor]) -> tuple[Tensor, list[float], list[float]]:
+    """Discriminator adversarial losses."""
+    # For forward
+    loss = 0
+    # For logging
+    r_losses: list[float] = []
+    g_losses: list[float] = []
 
-  return loss, gen_losses
+    for dr, dg in zip(disc_real_outputs, disc_generated_outputs):
+        # Forward
+        r_loss = F.mse_loss(ones_like( dr), dr)
+        g_loss = F.mse_loss(zeros_like(dg), dg)
+        loss += (r_loss + g_loss)
+        # For logging
+        r_losses.append(r_loss.item())
+        g_losses.append(g_loss.item())
+
+    return loss, r_losses, g_losses
 
 
-def kl_loss(z_p, logs_q, m_p, logs_p, z_mask):
-  """
-  z_p, logs_q: [b, h, t_t]
-  m_p, logs_p: [b, h, t_t]
-  """
-  z_p = z_p.float()
-  logs_q = logs_q.float()
-  m_p = m_p.float()
-  logs_p = logs_p.float()
-  z_mask = z_mask.float()
+def generator_loss(disc_outputs: list[Tensor]) -> tuple[Tensor, list[Tensor]]:
+    """Generator adversarial losses."""
+    loss = 0
+    # For logging
+    gen_losses: list[Tensor] = []
+    for dg in disc_outputs:
+        # Forward
+        l = F.mse_loss(ones_like(dg), dg)
+        loss += l
+        # For logging
+        gen_losses.append(l)
 
-  kl = logs_p - logs_q - 0.5
-  kl += 0.5 * ((z_p - m_p)**2) * torch.exp(-2. * logs_p)
-  kl = torch.sum(kl * z_mask)
-  l = kl / torch.sum(z_mask)
-  return l
+    return loss, gen_losses
+
+
+def kl_loss(z_p: Tensor, logs_q: Tensor, m_p: Tensor, logs_p: Tensor) -> Tensor:
+    """
+    KL divergence loss.
+
+    Args:
+        z_p :: (B, Feat, Frame)
+        logs_q : [b, h, t_t]
+        m_p: [b, h, t_t]
+        logs_p: [b, h, t_t]
+    """
+    kl = logs_p - logs_q - 0.5
+    kl += 0.5 * ((z_p - m_p)**2) * torch.exp(-2. * logs_p)
+    l = torch.mean(kl)
+
+    return l
+
 
 def subband_stft_loss(h, y_mb, y_hat_mb):
   sub_stft_loss = MultiResolutionSTFTLoss(h.train.fft_sizes, h.train.hop_sizes, h.train.win_lengths)
