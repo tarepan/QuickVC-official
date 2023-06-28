@@ -48,7 +48,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    pool = Pool(processes=cpu_count()-2)
+    n_cpu = cpu_count() if cpu_count() > 0 else 1
+    pool = Pool(processes=n_cpu)
 
     for speaker in os.listdir(args.in_dir):
         spk_dir = os.path.join(args.in_dir, speaker)
