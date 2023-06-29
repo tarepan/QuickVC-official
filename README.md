@@ -9,6 +9,9 @@
 Clone of the official ***QuickVC*** implementation.  
 [Official demo](https://quickvc.github.io/quickvc-demo).  
 
+- [`main` branch](https://github.com/tarepan/QuickVC-official/tree/main): Refactored & improved
+- [`minfast` branch](https://github.com/tarepan/QuickVC-official/tree/minfast): Fast training with minumum change
+
 <img src="qvcfinalwhite.png" width="100%">
 
 ## [Pretrained Model](https://drive.google.com/drive/folders/1DF6RgIHHkn2aoyyUMt4_hPitKSc2YR9d?usp=share_link)
